@@ -33,11 +33,6 @@ stages:
             with:
               version: '3.11.9'
 
-          - name: setup-go
-            uses: setup-go
-            with:
-              version: '1.23.12'
-
           - name: 运行 pre-commit
             uses: openlibing-pre-commit-action
             with:
