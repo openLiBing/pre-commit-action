@@ -23,21 +23,16 @@ stages:
         needs: []
         runs-on: [ 'codearts-hosted', 'ubuntu-latest', x64, 'large']
         steps:
-
-          - name: official_checkout
-            uses: official_checkout
-
-
+          - name: checkout
+            uses: checkout
           - name: Python version
             run: setup-python
             with:
               version: '3.11.9'
-
           - name: 运行 pre-commit
             uses: openlibing-pre-commit-action
             with:
               extra_args: ${{ inputs.extra_args }}
-
-
+              gc_token: ${{ inputs.GC_TOKEN }}
     pre:
       - type: auto

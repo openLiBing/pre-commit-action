@@ -21,8 +21,8 @@
 
 ```yaml
 steps:
-  - name: official_checkout
-    uses: official_checkout
+  - name: checkout
+    uses: checkout
 
   - name: setup-python
     uses: setup-python
@@ -33,7 +33,7 @@ steps:
 
 ## 注意事项
 
-- 运行前需先使用 `official_checkout` 检出代码
+- 运行前需先使用 `checkout` 检出代码
 - 运行前需先使用 `setup-python` 配置 Python 环境
 - 项目根目录需包含 `.pre-commit-config.yaml` 配置文件
 - PR 增量检查依赖 `ATOMGIT_BASE_REF` 和 `ATOMGIT_HEAD_REF` 环境变量

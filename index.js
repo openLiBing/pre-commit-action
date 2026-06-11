@@ -6,41 +6,14 @@ const os = require('os');
 const PIP_MIRROR = 'https://mirrors.huaweicloud.com/repository/pypi/simple';
 const GO_PROXY = 'https://mirrors.huaweicloud.com/repository/goproxy/';
 const PIP_TIMEOUT = '120';
-const FILE_THRESHOLD = 50;
+const BATCH_SIZE = 30;
+const DEFAULT_SUPPORTED_HOOKS = ['clang-format', 'ruff-format', 'trailing-whitespace', 'end-of-file-fixer'];
+const USER = { login: 'pre_commit_action', email: 'pre-commit-action@openlibing.com'};
+const GC_TOKEN = getInput('GC_TOKEN');
 
 function getInput(name) {
   const val = process.env[`INPUT_${name.toUpperCase()}`] || '';
   return val.trim();
-}
-
-function setOutput(key, value) {
-  const stepOutput = process.env.STEP_OUTPUT;
-  if (!stepOutput) {
-    console.log(`[WARN] STEP_OUTPUT env not set, skip output: ${key}=${value}`);
-    return;
-  }
-
-  let filePath;
-  try {
-    const stat = fs.statSync(stepOutput);
-    if (stat.isDirectory()) {
-      filePath = path.join(stepOutput, 'output');
-    } else {
-      filePath = stepOutput;
-    }
-  } catch (e) {
-    const parentDir = path.dirname(stepOutput);
-    if (fs.existsSync(parentDir) && fs.statSync(parentDir).isDirectory()) {
-      filePath = stepOutput;
-    } else {
-      console.log(`[WARN] STEP_OUTPUT path is invalid, skip output: ${key}=${value}`);
-      return;
-    }
-  }
-
-  const line = `${key}=${value}\n`;
-  fs.appendFileSync(filePath, line, 'utf-8');
-  console.log(`[OUTPUT] ${key}=${value}`);
 }
 
 function exec(cmd) {
@@ -52,6 +25,31 @@ function sanitizePath(pathStr) {
   return pathStr.replace(/(\d+\.\d+\.\d+\.\d+)/g, '[IP_ADDRESS]');
 }
 
+function parsePreCommitHooks(configPath) {
+  const content = fs.readFileSync(configPath, 'utf-8');
+  const hookIds = [];
+  const re = /^\s*-\s+id:\s*['"]?([\w.-]+)['"]?\s*$/gm;
+  let m;
+  while ((m = re.exec(content)) !== null) {
+    hookIds.push(m[1]);
+  }
+  return hookIds;
+}
+
+function classifyHooks(configuredHooks) {
+  const supportedSet = new Set(DEFAULT_SUPPORTED_HOOKS);
+  const supported = [];
+  const unsupported = [];
+  for (const hookId of configuredHooks) {
+    if (supportedSet.has(hookId)) {
+      supported.push(hookId);
+    } else {
+      unsupported.push(hookId);
+    }
+  }
+  return [supported, unsupported];
+}
+
 function execCapture(cmd) {
   try {
     return execSync(cmd, { encoding: 'utf-8', shell: '/bin/bash' }).trim();
@@ -60,96 +58,141 @@ function execCapture(cmd) {
   }
 }
 
+function getLoginEmail() {
+  if (!GC_TOKEN) {
+    console.log('[WARN] GC_TOKEN 未设置，使用默认信息');
+  } else {
+    const host = process.env.ATOMGIT_REPOSITORY_URL.includes('test.gitcode.net') ? 'test.gitcode.net' : 'api.gitcode.com';
+    try {
+      console.log('[INFO] 开始通过接口获取 GC_TOKEN 对应用户信息');
+      const output = execCapture(`curl -s --max-time 10 'https://${host}/api/v5/user' --header 'PRIVATE-TOKEN: ${GC_TOKEN}'`);
+      if (output) {
+        console.log(`output: ${output}`);
+        const resp = JSON.parse(output);
+        const login = resp.login || resp.name || USER.login;
+        const email = resp.email || USER.email;
+        USER.login = login;
+        USER.email = email;
+      } else {
+        console.log(`[ERROR] 通过接口获取 GC_TOKEN 对应用户信息为空，使用默认信息`);
+      }
+    } catch (e) {
+      console.log(`[ERROR] 通过接口获取 GC_TOKEN 对应用户信息失败，使用默认信息`, e);
+    }
+  }
+  console.log(`- Login: ${USER.login}`);
+  console.log(`- Email: ${USER.email}`);
+}
+
 function buildAutoArgs() {
   const eventName = (process.env.ATOMGIT_EVENT_NAME || '').toLowerCase();
   const baseRef = process.env.ATOMGIT_BASE_REF || '';
   const headRef = process.env.ATOMGIT_HEAD_REF || '';
-  const repoUrl = process.env.REPO_URL || process.env.ATOMGIT_SERVER_URL || '';
-  const repository = process.env.ATOMGIT_REPOSITORY || '';
 
   if ((eventName === 'mr' || eventName === 'pull_request') && baseRef && headRef) {
     console.log(`[INFO] 检测到 PR 事件: ${headRef} -> ${baseRef}`);
-
-    exec(`git fetch origin ${baseRef} 2>/dev/null || true`);
-    exec(`git fetch origin ${headRef} 2>/dev/null || true`);
-
-    let diffFiles = execCapture(`git diff --name-only origin/${baseRef}...origin/${headRef}`);
-
-    if (!diffFiles && repoUrl && repository) {
-      console.log('[INFO] origin 方式未获取到差异，尝试添加上游远程');
-      const upstreamUrl = `${repoUrl}/${repository}`;
-      exec(`git remote add upstream ${upstreamUrl} 2>/dev/null || true`);
-      exec(`git fetch upstream ${baseRef} 2>/dev/null || true`);
-      exec(`git fetch upstream ${headRef} 2>/dev/null || true`);
-
-      diffFiles = execCapture(`git diff --name-only upstream/${baseRef}...upstream/${headRef}`);
-      if (!diffFiles) {
-        diffFiles = execCapture(`git diff --name-only origin/${baseRef}...upstream/${headRef}`);
-      }
-      if (!diffFiles) {
-        diffFiles = execCapture(`git diff --name-only upstream/${baseRef}...origin/${headRef}`);
-      }
+    exec(`git config --global core.quotepath false`);
+    exec(`git config user.name ${USER.login}`);
+    exec(`git config user.email ${USER.email}`);
+    exec(`git fetch origin refs/merge-requests/${process.env.MERGE_REQUEST_IID}/head:pr_${process.env.MERGE_REQUEST_IID}`);
+    exec(`git fetch origin ${baseRef} --unshallow`); // 环境默认拉取深度为1，需要重新拉取，否则merge会失败
+    exec(`git checkout pr_${process.env.MERGE_REQUEST_IID}`);
+    try {
+      exec(`git merge origin/${baseRef} --no-edit`);
+    } catch (e) {
+      console.error("[ERROR] 合并PR修改到目标分支失败，请优先处理冲突 (或检查PR与target是否共享历史)");
+      throw e;
     }
-
-    if (!diffFiles) {
-      const mergeBase = execCapture(`git merge-base origin/${baseRef} HEAD 2>/dev/null || git merge-base upstream/${baseRef} HEAD 2>/dev/null`);
-      if (mergeBase) {
-        console.log(`[INFO] 使用 merge-base 方式: ${mergeBase.substring(0, 8)}...HEAD`);
-        diffFiles = execCapture(`git diff --name-only ${mergeBase}...HEAD`);
-      }
-    }
-
-    if (diffFiles) {
-      const fileList = diffFiles.split('\n').filter(f => f.trim());
-      console.log(`[INFO] PR 变更文件 (${fileList.length} 个):`);
-      fileList.forEach(f => console.log(`  - ${f}`));
-
-      if (fileList.length > FILE_THRESHOLD) {
-        console.log(`[INFO] 变更文件超过 ${FILE_THRESHOLD} 个，使用文件列表方式执行`);
-        const tmpFile = path.join(os.tmpdir(), 'pre-commit-files.txt');
-        fs.writeFileSync(tmpFile, diffFiles, 'utf-8');
-        return { type: 'file', tmpFile, count: fileList.length };
-      }
-
-      return { type: 'args', value: `--files ${diffFiles.replace(/\n/g, ' ')}` };
-    } else {
-      console.log('[WARN] 未检测到差异文件，回退到 --all 模式');
-      return { type: 'args', value: '--all' };
-    }
+    let diffFiles = execCapture(`git diff ${baseRef}...pr_${process.env.MERGE_REQUEST_IID} --name-only --diff-filter=ACMR`);
+    return { type: 'file', files: diffFiles.split('\n')};
   }
-
   console.log('[INFO] 非 PR 事件，使用 --all 检查全量文件');
-  return { type: 'args', value: '--all' };
+  return { type: 'args', args: '--all' };
 }
 
-function runPreCommit(cmdResult) {
+function runPreCommit(cmdResult, hooks, failExit) {
+  let checkFailed = false;
   if (cmdResult.type === 'file') {
-    const content = fs.readFileSync(cmdResult.tmpFile, 'utf-8');
-    const files = content.split('\n').filter(f => f.trim());
-    const BATCH_SIZE = 30;
-    let failed = false;
-
-    for (let i = 0; i < files.length; i += BATCH_SIZE) {
-      const batch = files.slice(i, i + BATCH_SIZE);
-      const batchArgs = `--files ${batch.join(' ')}`;
-      console.log(`\n[INFO] 批次 ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(files.length / BATCH_SIZE)} (${batch.length} 个文件)`);
-      try {
-        exec(`python -m pre_commit run ${batchArgs}`);
-      } catch (e) {
-        failed = true;
+    if (!hooks || hooks.length === 0) {
+      console.log('[INFO] 没有需要运行的 hook');
+      return;
+    }
+    let batchFiles = [];
+    for (let i = 0; i < cmdResult.files.length; i++) {
+      batchFiles.push(cmdResult.files[i])
+      if (batchFiles.length === BATCH_SIZE || i === cmdResult.files.length - 1) {
+        for (const hook of hooks) {
+          try {
+            exec(`python -m pre_commit run ${hook} --files ${batchFiles.join(' ')}`);
+            console.log(`[OK] ${hook} 检查通过`);
+          } catch (e) {
+            checkFailed = true;
+          }
+        }
+        batchFiles = []
       }
     }
-
-    try { fs.unlinkSync(cmdResult.tmpFile); } catch (e) {}
-    if (failed) throw new Error('pre-commit check failed');
   } else {
-    exec(`python -m pre_commit run ${cmdResult.value}`);
+    try {
+      exec(`python -m pre_commit run ${cmdResult.args}`);
+      console.log('[INFO] 自定义命令参数执行 pre-commit 检查通过');
+      process.exit(0);
+    } catch (e) {
+      checkFailed = true;
+    }
+  }
+  if (checkFailed && failExit) {
+    console.log('[ERROR] pre-commit 检查失败');
+    console.log('\n[INFO] 请在本地执行以下命令修复后重新提交:');
+    console.log('1. 安装/初始化环境');
+    console.log('   pip install pre-commit && pre-commit install --install-hooks');
+    console.log('2. 检查并修复变更文件');
+    process.exit(1);
+  }
+}
+
+function commitAndPushAutoFix(prFiles) {
+  const status = execCapture(`git status --porcelain | awk \'{print $2}\'`);
+  console.log(`git status --porcelain | awk \'{print $2}\'`);
+  if (!status) {
+    console.log('[INFO] pre-commit 修复无内容修改，无需推送');
+    return;
+  }
+  console.log(`${status}`);
+  console.log(`[INFO] 本次 PR 修改文件: `);
+  for (let file of prFiles) {
+    console.log(`  - ${file}`);
+  }
+  const diffFiles = status.split('\n').filter(f => prFiles.includes(f));
+  console.log(`[INFO] pre-commit 修复文件: `);
+  for (let file of diffFiles) {
+    console.log(`  - ${file}`);
+  }
+  try {
+    const webhook = JSON.parse(process.env.WEBHOOK_PAYLOAD);
+    const randDir = path.join(os.tmpdir(), `${process.env.ATOMGIT_REPOSITORY}-${Date.now()}`);
+    console.log(`[INFO] 开始下载 fork 仓库到临时目录: ${randDir}`);
+    let forkUrl = webhook.merge_request.source.git_http_url;
+    if (GC_TOKEN) {
+      forkUrl = forkUrl.replace('https://', `https://oauth2:${GC_TOKEN}@`);
+    }
+    exec(`git clone -b "${process.env.ATOMGIT_HEAD_REF}" "${forkUrl}" "${randDir}"`);
+    for (let diffFile of diffFiles) {
+      exec(`cp "${diffFile}" "${randDir}/${diffFile}"`);
+    }
+    exec(`cd "${randDir}" && git config user.name ${USER.login}`);
+    exec(`cd "${randDir}" && git config user.email ${USER.email}`);
+    exec(`cd "${randDir}" && git commit -am "[openlibing.ci] auto fixes by pre-commit"`);
+    exec(`cd "${randDir}" && git push`);
+    console.log('[OK] 已成功推送修改到 PR');
+  } catch (e) {
+    console.log(`[ERROR] 提交或推送失败，请添加有权限推送的 GC_TOKEN`);
+    process.exit(1);
   }
 }
 
 async function run() {
   const extraArgs = getInput('extra_args');
-
   console.log('===== pre-commit-action 启动 =====');
 
   console.log('\n===== [1] 检查 Python 环境 =====');
@@ -188,7 +231,6 @@ async function run() {
 
   if (!repoPath || !fs.existsSync(repoPath)) {
     console.log('[ERROR] 无法确定代码目录');
-    setOutput('result', 'failed');
     process.exit(1);
   }
 
@@ -196,112 +238,65 @@ async function run() {
   console.log(`代码目录: ${process.cwd()}`);
 
   console.log('\n===== [4] 检查 .pre-commit-config.yaml =====');
+  let supportedHooks = [];
+  let unsupportedHooks = [];
   if (!fs.existsSync('.pre-commit-config.yaml')) {
     console.log('[INFO] 未找到 .pre-commit-config.yaml，跳过 pre-commit 检查');
-    setOutput('result', 'success');
-    setOutput('checked_files', 'skipped');
     return;
   }
   console.log('[OK] 找到 .pre-commit-config.yaml');
 
   console.log('\n===== [5] 构建运行参数 =====');
+  getLoginEmail();
   let cmdResult;
   if (extraArgs) {
     console.log(`[INFO] 检测到自定义参数: ${extraArgs}`);
-    cmdResult = { type: 'args', value: extraArgs };
+    cmdResult = { type: 'args', args: extraArgs };
   } else {
     console.log('[INFO] 未指定参数，自动判断检查模式');
     cmdResult = buildAutoArgs();
   }
   if (cmdResult.type === 'args') {
-    console.log(`最终参数: ${cmdResult.value}`);
+    console.log(`指定参数执行: ${cmdResult.args}`);
   } else {
-    console.log(`最终模式: 分批执行 (${cmdResult.count} 个文件，每批 30 个)`);
-  }
-
-  console.log('\n===== [6] 运行 pre-commit =====');
-  const MAX_RETRIES = 3;
-  let preCommitPassed = false;
-  let failedFiles = [];
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    if (attempt > 1) {
-      console.log(`\n[INFO] 第 ${attempt} 次重试...`);
-    }
-    const output = execCapture(`python -m pre_commit run ${cmdResult.type === 'file' ? '--all' : cmdResult.value} 2>&1; echo "EXIT_CODE:$?"`);
-    console.log(output);
-    const exitCodeMatch = output.match(/EXIT_CODE:(\d+)/);
-    const exitCode = exitCodeMatch ? parseInt(exitCodeMatch[1]) : 1;
-    const isNetworkError = /URLError|SSL:|UNEXPECTED_EOF|timed out|Connection refused|Could not resolve/i.test(output);
-    if (exitCode === 0) {
-      preCommitPassed = true;
-      setOutput('result', 'success');
-      break;
-    }
-    if (isNetworkError && attempt < MAX_RETRIES) {
-      console.log(`[WARN] 检测到网络错误，将进行第 ${attempt + 1} 次重试...`);
-      continue;
-    }
-    break;
-  }
-  if (!preCommitPassed) {
-    setOutput('result', 'failed');
-    try {
-      const changedFiles = execCapture('git diff HEAD --name-only');
-      if (changedFiles) {
-        failedFiles = changedFiles.split('\n').filter(f => f.trim());
-        console.log('===== 需要修改的文件 =====');
-        failedFiles.forEach(f => console.log(`  - ${f}`));
-        console.log('');
-        const diffStat = execCapture('git diff HEAD --stat');
-        if (diffStat) console.log(diffStat);
-      } else {
-        const fallbackFiles = execCapture('git diff --name-only');
-        if (fallbackFiles) {
-          failedFiles = fallbackFiles.split('\n').filter(f => f.trim());
-          console.log('===== 需要修改的文件 =====');
-          failedFiles.forEach(f => console.log(`  - ${f}`));
-          console.log('');
-          const fallbackStat = execCapture('git diff --stat');
-          if (fallbackStat) console.log(fallbackStat);
-        } else {
-          console.log('[INFO] 未检测到文件修改（pre-commit 可能因环境错误而失败）');
-        }
-      }
-    } catch (diffErr) {
-      console.log(`[WARN] 获取 diff 失败: ${diffErr.message}`);
+    if (cmdResult.files.length === 0) {
+      console.log(`无任何变更文件，无需检查`)
+      return;
     }
   }
 
-  console.log('\n================================================================');
-  if (preCommitPassed) {
-    console.log('[INFO] pre-commit 检查全部通过');
-  } else {
-    console.log('[ERROR] pre-commit 检查失败');
-    console.log('[INFO] 请在本地执行以下命令修复后重新提交:');
-    console.log('');
-    console.log('1. 安装/初始化环境');
-    console.log('   pip install pre-commit && pre-commit install --install-hooks');
-    console.log('');
-    console.log('2. 检查并修复变更文件');
-    if (failedFiles.length > 0) {
-      console.log(`   pre-commit run --files ${failedFiles.join(' ')}`);
+  try {
+    const configuredHooks = parsePreCommitHooks('.pre-commit-config.yaml');
+    [supportedHooks, unsupportedHooks] = classifyHooks(configuredHooks);
+    console.log(`[INFO] 已配置 hook 总数: ${configuredHooks.length}`);
+    console.log(`[INFO] 默认支持的 hook (${supportedHooks.length} 个):`);
+    if (supportedHooks.length === 0) {
+      console.log('  - (无)');
     } else {
-      console.log('   pre-commit run --all');
+      supportedHooks.forEach(h => console.log(`  - ${h}`));
     }
+    console.log(`[INFO] 未默认支持的 hook (${unsupportedHooks.length} 个):`);
+    if (unsupportedHooks.length === 0) {
+      console.log('  - (无)');
+    } else {
+      unsupportedHooks.forEach(h => console.log(`  - ${h}`));
+    }
+  } catch (e) {
+    console.log(`[WARN] 解析配置失败: ${e.message}`);
   }
-  console.log('================================================================');
 
-  if (!preCommitPassed) {
-    process.exit(1);
-  }
+  console.log('\n===== [6] 运行未默认支持的 hook 检查 =====');
+  runPreCommit(cmdResult, unsupportedHooks, true);
 
-  const checkedInfo = cmdResult.type === 'file' ? `batch:${cmdResult.count}files` : cmdResult.value;
-  setOutput('checked_files', checkedInfo);
+  console.log('\n===== [7] 运行默认支持的 hook 检查 =====');
+  runPreCommit(cmdResult, supportedHooks, false);
+
+  console.log('\n===== [8] 推送修改到原仓 =====');
+  commitAndPushAutoFix(cmdResult.files);
 }
 
 run().catch(err => {
   const sanitizedMessage = sanitizePath(err.message);
   console.error(`Action 执行失败: ${sanitizedMessage}`);
-  setOutput('result', 'failed');
   process.exit(1);
 });
