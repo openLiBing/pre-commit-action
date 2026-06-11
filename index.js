@@ -28,7 +28,7 @@ function sanitizePath(pathStr) {
 function parsePreCommitHooks(configPath) {
   const content = fs.readFileSync(configPath, 'utf-8');
   const hookIds = [];
-  const re = /^\s*-\s+id:\s*['"]?([\w.-]+)['"]?\s*$/gm;
+  const re = /^\s*-\s+id:\s*['"]?([\w.-]+)['"]?\s*(?:#.*)?$/gm;
   let m;
   while ((m = re.exec(content)) !== null) {
     hookIds.push(m[1]);
@@ -269,17 +269,17 @@ async function run() {
     const configuredHooks = parsePreCommitHooks('.pre-commit-config.yaml');
     [supportedHooks, unsupportedHooks] = classifyHooks(configuredHooks);
     console.log(`[INFO] 已配置 hook 总数: ${configuredHooks.length}`);
-    console.log(`[INFO] 默认支持的 hook (${supportedHooks.length} 个):`);
-    if (supportedHooks.length === 0) {
-      console.log('  - (无)');
-    } else {
-      supportedHooks.forEach(h => console.log(`  - ${h}`));
-    }
     console.log(`[INFO] 未默认支持的 hook (${unsupportedHooks.length} 个):`);
     if (unsupportedHooks.length === 0) {
       console.log('  - (无)');
     } else {
       unsupportedHooks.forEach(h => console.log(`  - ${h}`));
+    }
+    console.log(`[INFO] 默认支持的 hook (${supportedHooks.length} 个):`);
+    if (supportedHooks.length === 0) {
+      console.log('  - (无)');
+    } else {
+      supportedHooks.forEach(h => console.log(`  - ${h}`));
     }
   } catch (e) {
     console.log(`[WARN] 解析配置失败: ${e.message}`);
