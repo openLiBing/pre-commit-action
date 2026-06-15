@@ -3,8 +3,13 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-const PIP_MIRROR = 'https://mirrors.huaweicloud.com/repository/pypi/simple';
-const GO_PROXY = 'https://mirrors.huaweicloud.com/repository/goproxy/';
+const PIP_MIRROR_DEFAULT = 'https://mirrors.huaweicloud.com/repository/pypi/simple';
+const GO_PROXY_DEFAULT = 'https://mirrors.huaweicloud.com/repository/goproxy/';
+const PIP_ORIGINAL = 'https://pypi.org/simple';
+const GO_PROXY_ORIGINAL = 'https://proxy.golang.org/';
+const SPEED_TEST_TIMEOUT = 5;
+let PIP_MIRROR = '';
+let GO_PROXY = '';
 const PIP_TIMEOUT = '120';
 const BATCH_SIZE = 30;
 const DEFAULT_SUPPORTED_HOOKS = ['clang-format', 'ruff-format', 'trailing-whitespace', 'end-of-file-fixer'];
@@ -55,6 +60,70 @@ function execCapture(cmd) {
     return execSync(cmd, { encoding: 'utf-8', shell: '/bin/bash' }).trim();
   } catch (e) {
     return '';
+  }
+}
+
+function testUrlSpeed(url) {
+  const result = execCapture(`curl -s -o /dev/null -w "%{time_total}" --max-time ${SPEED_TEST_TIMEOUT} "${url}" 2>/dev/null`);
+  if (!result) return -1;
+  const seconds = parseFloat(result);
+  if (isNaN(seconds) || seconds <= 0) return -1;
+  return Math.round(seconds * 1000);
+}
+
+function detectMirrorConfig() {
+  console.log('[INFO] 开始网络测速，选择最快的源...');
+
+  const pipOriginalMs = testUrlSpeed(PIP_ORIGINAL);
+  const pipMirrorMs = testUrlSpeed(PIP_MIRROR_DEFAULT);
+
+  console.log(`[INFO] PyPI 源站 (${PIP_ORIGINAL}) 响应: ${pipOriginalMs >= 0 ? pipOriginalMs + 'ms' : '超时/不可达'}`);
+  console.log(`[INFO] 华为镜像 (${PIP_MIRROR_DEFAULT}) 响应: ${pipMirrorMs >= 0 ? pipMirrorMs + 'ms' : '超时/不可达'}`);
+
+  if (pipOriginalMs < 0 && pipMirrorMs < 0) {
+    PIP_MIRROR = PIP_ORIGINAL;
+    console.log('[WARN] PyPI 源站和镜像均不可达，默认使用源站');
+  } else if (pipOriginalMs < 0) {
+    PIP_MIRROR = PIP_MIRROR_DEFAULT;
+    console.log('[INFO] PyPI 源站不可达，使用华为镜像');
+  } else if (pipMirrorMs < 0) {
+    PIP_MIRROR = PIP_ORIGINAL;
+    console.log('[INFO] 华为镜像不可达，使用 PyPI 源站');
+  } else if (pipOriginalMs <= pipMirrorMs) {
+    PIP_MIRROR = PIP_ORIGINAL;
+    console.log(`[OK] PyPI 源站更快 (${pipOriginalMs}ms <= ${pipMirrorMs}ms)，使用源站`);
+  } else {
+    PIP_MIRROR = PIP_MIRROR_DEFAULT;
+    console.log(`[OK] 华为镜像更快 (${pipMirrorMs}ms < ${pipOriginalMs}ms)，使用镜像`);
+  }
+
+  const goVersion = execCapture('go version');
+  if (goVersion) {
+    const goOriginalMs = testUrlSpeed(GO_PROXY_ORIGINAL);
+    const goMirrorMs = testUrlSpeed(GO_PROXY_DEFAULT);
+
+    console.log(`[INFO] Go 源站 (${GO_PROXY_ORIGINAL}) 响应: ${goOriginalMs >= 0 ? goOriginalMs + 'ms' : '超时/不可达'}`);
+    console.log(`[INFO] 华为镜像 (${GO_PROXY_DEFAULT}) 响应: ${goMirrorMs >= 0 ? goMirrorMs + 'ms' : '超时/不可达'}`);
+
+    if (goOriginalMs < 0 && goMirrorMs < 0) {
+      GO_PROXY = GO_PROXY_ORIGINAL;
+      console.log('[WARN] Go 源站和镜像均不可达，默认使用源站');
+    } else if (goOriginalMs < 0) {
+      GO_PROXY = GO_PROXY_DEFAULT;
+      console.log('[INFO] Go 源站不可达，使用华为镜像');
+    } else if (goMirrorMs < 0) {
+      GO_PROXY = GO_PROXY_ORIGINAL;
+      console.log('[INFO] 华为镜像不可达，使用 Go 源站');
+    } else if (goOriginalMs <= goMirrorMs) {
+      GO_PROXY = GO_PROXY_ORIGINAL;
+      console.log(`[OK] Go 源站更快 (${goOriginalMs}ms <= ${goMirrorMs}ms)，使用源站`);
+    } else {
+      GO_PROXY = GO_PROXY_DEFAULT;
+      console.log(`[OK] 华为镜像更快 (${goMirrorMs}ms < ${goOriginalMs}ms)，使用镜像`);
+    }
+  } else {
+    GO_PROXY = GO_PROXY_DEFAULT;
+    console.log('[INFO] Go 未安装，跳过 Go 代理测速');
   }
 }
 
@@ -199,6 +268,7 @@ async function run() {
   exec('python --version');
 
   console.log('\n===== [2] 安装 pre-commit =====');
+  detectMirrorConfig();
   exec(`python -m pip config set global.index-url ${PIP_MIRROR}`);
   console.log('[INFO] 检查 Go 环境...');
   const goVersion = execCapture('go version');
