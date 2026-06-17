@@ -58,6 +58,26 @@ jobs:
 
 > **说明**：`runs-on: ['self-hosted', 'os=ubuntu', 'arch=x64']` 表示使用自定义执行机运行流水线，适用于 hooks 来源为 GitHub 等外部仓库的场景。
 
+## 自动修复
+
+当检查项仅包含以下代码风格类 hook 时，支持自动修复并推送修复后的代码：
+
+- `clang-format`
+- `ruff-format`
+- `trailing-whitespace`
+- `end-of-file-fixer`
+
+如果配置了上述以外的其他检查项，则不会触发自动修复，仅输出检查结果。
+
+### 配置方式
+
+自动修复需要在组织中配置 Actions 密钥 `GC_TOKEN`，用于修复代码的推送。配置步骤：
+
+1. 进入组织（或仓库）的 **Settings → Secrets → Actions**
+2. 新建密钥，名称为 `GC_TOKEN`，值为具有代码推送权限的访问令牌
+
+> **注意**：未配置 `GC_TOKEN` 时，即使检查项符合自动修复条件，也不会执行自动修复推送。
+
 ## 注意事项
 
 - 运行前需先使用 `checkout` 检出代码
