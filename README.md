@@ -19,6 +19,8 @@
 
 ## 使用示例
 
+### 默认方式（使用 GitCode 镜像仓的 hooks）
+
 ```yaml
 steps:
   - name: checkout
@@ -30,6 +32,27 @@ steps:
   - name: run pre-commit
     uses: openlibing-pre-commit-action
 ```
+
+### 使用自定义执行机（适用于非 GitCode 镜像仓的 hooks）
+
+当 `.pre-commit-config.yaml` 中配置的 hooks 仓库地址不是 GitCode 镜像仓时（例如使用了 GitHub 等外部仓库的 hooks），云端执行机可能无法访问这些外部地址。此时可以通过自定义执行机（self-hosted runner）来运行，自定义执行机可以访问外部网络资源。
+
+```yaml
+jobs:
+  pre-commit:
+    runs-on: ['self-hosted', 'os=ubuntu', 'arch=x64']
+    steps:
+      - name: checkout
+        uses: checkout
+
+      - name: setup-python
+        uses: setup-python
+
+      - name: run pre-commit
+        uses: openlibing-pre-commit-action
+```
+
+> **说明**：`runs-on: ['self-hosted', 'os=ubuntu', 'arch=x64']` 表示使用自定义执行机运行流水线，适用于 hooks 来源为 GitHub 等外部仓库的场景。
 
 ## 注意事项
 
