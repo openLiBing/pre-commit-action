@@ -31,6 +31,8 @@ steps:
 
   - name: run pre-commit
     uses: openlibing-pre-commit-action
+    with:
+      extra_args: ${{ inputs.extra_args }}
 ```
 
 ### 使用自定义执行机（适用于非 GitCode 镜像仓的 hooks）
@@ -50,6 +52,8 @@ jobs:
 
       - name: run pre-commit
         uses: openlibing-pre-commit-action
+        with:
+          extra_args: ${{ inputs.extra_args }}
 ```
 
 > **说明**：`runs-on: ['self-hosted', 'os=ubuntu', 'arch=x64']` 表示使用自定义执行机运行流水线，适用于 hooks 来源为 GitHub 等外部仓库的场景。
