@@ -110,12 +110,6 @@ repos:
       - id: trailing-whitespace
       - id: end-of-file-fixer
 
-  # ✅ GitCode 镜像仓 — clang-format 代码格式化，无需自定义执行机
-  - repo: https://atomgit.com/openlibing/mirrors-clang-format
-    rev: v1.0.0
-    hooks:
-      - id: clang-format
-
   # ✅ GitCode 镜像仓 — gitleaks 敏感信息扫描，国内网络可使用镜像仓加速下载
   # 安装说明：自动安装依赖 Go 运行环境，国内网络无代理建议先手动下载并安装 Go 环境：https://golang.google.cn/dl
   - repo: https://gitcode.com/GitHub_Trending/gi/gitleaks
@@ -125,7 +119,7 @@ repos:
         entry: gitleaks dir
 ```
 
-> **判断依据**：hooks 的 `repo` 地址以 `https://atomgit.com/` 或 `https://gitcode.com/` 开头的是 GitCode 镜像仓，云端执行机可直接访问；以 `https://github.com/` 或其他外部地址开头的，需要使用自定义执行机。
+> **判断依据**：hooks 的 `repo` 地址以 `https://gitcode.com/` 开头的是 GitCode 镜像仓，云端执行机可直接访问；以 `https://github.com/` 或其他外部地址开头的，需要使用自定义执行机。
 
 ## 自动修复
 
