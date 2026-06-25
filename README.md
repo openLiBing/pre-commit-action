@@ -26,6 +26,7 @@
 ```yaml
 jobs:
   pre-commit:
+    name: pre-commit
     runs-on: ['self-hosted', 'os=ubuntu', 'arch=x64']  # ⚠️ 自定义执行机：必须包含 'self-hosted'，其余标签根据执行机注册时的标签填写，用于精确调度
     steps:
       - name: checkout
@@ -33,6 +34,8 @@ jobs:
 
       - name: setup-python
         uses: setup-python
+        with:
+          python-version: '3.11'
 
       - name: run pre-commit
         uses: openlibing-pre-commit-action
@@ -83,6 +86,7 @@ repos:
 ```yaml
 jobs:
   pre-commit:
+    name: pre-commit
     runs-on: ['codearts-hosted', 'ubuntu-latest', x64, 'large']  # ☁️ 云端执行机：使用 codearts-hosted 提供的云端运行环境
     steps:
       - name: checkout
@@ -90,6 +94,8 @@ jobs:
 
       - name: setup-python
         uses: setup-python
+        with:
+          python-version: '3.11'
 
       - name: run pre-commit
         uses: openlibing-pre-commit-action
