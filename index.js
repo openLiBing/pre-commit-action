@@ -26,9 +26,9 @@ function exec(cmd) {
   execSync(cmd, { stdio: 'inherit', shell: '/bin/bash' });
 }
 
-function execFile(cmd, args) {
+function execFile(cmd, args, options = {}) {
   console.log(`> ${cmd} ${args.join(' ')}`);
-  execFileSync(cmd, args, { stdio: 'inherit' });
+  execFileSync(cmd, args, { stdio: 'inherit', cwd: options.cwd });
 }
 
 function sanitizePath(pathStr) {
@@ -166,8 +166,8 @@ function buildAutoArgs() {
   if ((eventName === 'mr' || eventName === 'pull_request') && baseRef && headRef) {
     console.log(`[INFO] 检测到 PR 事件: ${headRef} -> ${baseRef}`);
     exec(`git config --global core.quotepath false`);
-    exec(`git config user.name ${USER.login}`);
-    exec(`git config user.email ${USER.email}`);
+    execFile('git', ['config', 'user.name', USER.login]);
+    execFile('git', ['config', 'user.email', USER.email]);
     exec(`git fetch origin refs/merge-requests/${process.env.MERGE_REQUEST_IID}/head:pr_${process.env.MERGE_REQUEST_IID}`);
     exec(`git fetch origin ${baseRef} --unshallow`); // 环境默认拉取深度为1，需要重新拉取，否则merge会失败
     exec(`git checkout pr_${process.env.MERGE_REQUEST_IID}`);
@@ -254,8 +254,8 @@ function commitAndPushAutoFix(prFiles) {
     for (let diffFile of diffFiles) {
       fs.copyFileSync(diffFile, path.join(randDir, diffFile));
     }
-    exec(`cd "${randDir}" && git config user.name ${USER.login}`);
-    exec(`cd "${randDir}" && git config user.email ${USER.email}`);
+    execFile('git', ['config', 'user.name', USER.login], { cwd: randDir });
+    execFile('git', ['config', 'user.email', USER.email], { cwd: randDir });
     exec(`cd "${randDir}" && git commit -am "[openlibing.ci] auto fixes by pre-commit"`);
     exec(`cd "${randDir}" && git push`);
     console.log('[OK] 已成功推送修改到 PR');
