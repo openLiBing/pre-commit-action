@@ -333,7 +333,7 @@ async function run() {
   console.log('\n===== [3] 定位代码目录 =====');
   const workspace = process.env.WORKSPACE || process.cwd();
 
-  if (!/^[\w\-\/]+$/.test(workspace)) {
+  if (!/^\/[\w\-\/.]+$/.test(workspace)) {
     console.log('[ERROR] Invalid workspace path');
     process.exit(1);
   }
