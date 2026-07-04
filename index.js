@@ -239,18 +239,18 @@ function runPreCommit(cmdResult, hooks, failExit) {
 }
 
 function commitAndPushAutoFix(prFiles) {
-  const status = execCapture(`git status --porcelain | awk \'{print $2}\'`);
-  console.log(`git status --porcelain | awk \'{print $2}\'`);
-  if (!status) {
+  const statusOutput = execCapture('git status --porcelain');
+  console.log('git status --porcelain');
+  if (!statusOutput) {
     console.log('[INFO] pre-commit 修复无内容修改，无需推送');
     return;
   }
-  console.log(`${status}`);
+  console.log(`${statusOutput}`);
   console.log(`[INFO] 本次 PR 修改文件: `);
   for (let file of prFiles) {
     console.log(`  - ${file}`);
   }
-  const diffFiles = status.split('\n').filter(f => prFiles.includes(f));
+  const diffFiles = statusOutput.split('\n').filter(line => line.trim()).map(line => line.substring(3)).filter(f => prFiles.includes(f));
   console.log(`[INFO] pre-commit 修复文件: `);
   for (let file of diffFiles) {
     console.log(`  - ${file}`);
