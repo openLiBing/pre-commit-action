@@ -149,7 +149,25 @@ function getLoginEmail() {
   if (!GC_TOKEN) {
     console.log('[WARN] GC_TOKEN 未设置，使用默认信息');
   } else {
-    const host = process.env.ATOMGIT_REPOSITORY_URL.includes('test.gitcode.net') ? 'test.gitcode.net' : 'api.gitcode.com';
+    const repoUrl = process.env.ATOMGIT_REPOSITORY_URL;
+    const urlPattern = /^https?:\/\/([^\/]+)/;
+    const match = repoUrl.match(urlPattern);
+
+    if (!match) {
+      console.log('[ERROR] Invalid repository URL');
+      process.exit(1);
+    }
+
+    const hostname = match[1];
+    const allowedHosts = ['gitcode.net', 'test.gitcode.net', 'gitee.com'];
+
+    if (!allowedHosts.some(h => hostname === h || hostname.endsWith('.' + h))) {
+      console.log(`[ERROR] Invalid repository host: ${hostname}`);
+      process.exit(1);
+    }
+
+    let host = hostname.includes('test.gitcode.net') ? 'test.gitcode.net' : 'api.gitcode.com';
+
     try {
       console.log('[INFO] 开始通过接口获取 GC_TOKEN 对应用户信息');
       const output = execCapture(`curl -s --max-time 10 'https://${host}/api/v5/user' --header 'PRIVATE-TOKEN: ${GC_TOKEN}'`);
