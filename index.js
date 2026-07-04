@@ -247,10 +247,20 @@ function commitAndPushAutoFix(prFiles) {
     const randDir = path.join(os.tmpdir(), `${process.env.ATOMGIT_REPOSITORY}-${Date.now()}`);
     console.log(`[INFO] 开始下载 fork 仓库到临时目录: ${randDir}`);
     let forkUrl = webhook.merge_request.source.git_http_url;
+
+    const allowedHosts = ['gitcode.net', 'test.gitcode.net', 'gitee.com'];
+    const parsedUrl = new URL(forkUrl);
+    if (!allowedHosts.includes(parsedUrl.hostname)) {
+      console.log(`[ERROR] Invalid repository host: ${parsedUrl.hostname}`);
+      process.exit(1);
+    }
+
     if (GC_TOKEN) {
       forkUrl = forkUrl.replace('https://', `https://oauth2:${GC_TOKEN}@`);
     }
-    exec(`git clone -b "${process.env.ATOMGIT_HEAD_REF}" "${forkUrl}" "${randDir}"`);
+
+    const headRef = process.env.ATOMGIT_HEAD_REF;
+    execFile('git', ['clone', '-b', headRef, forkUrl, randDir]);
     for (let diffFile of diffFiles) {
       fs.copyFileSync(diffFile, path.join(randDir, diffFile));
     }
