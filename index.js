@@ -1,4 +1,4 @@
-const { execSync } = require('child_process');
+const { execSync, execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -24,6 +24,11 @@ function getInput(name) {
 function exec(cmd) {
   console.log(`> ${cmd}`);
   execSync(cmd, { stdio: 'inherit', shell: '/bin/bash' });
+}
+
+function execFile(cmd, args) {
+  console.log(`> ${cmd} ${args.join(' ')}`);
+  execFileSync(cmd, args, { stdio: 'inherit' });
 }
 
 function sanitizePath(pathStr) {
@@ -192,7 +197,7 @@ function runPreCommit(cmdResult, hooks, failExit) {
       if (batchFiles.length === BATCH_SIZE || i === cmdResult.files.length - 1) {
         for (const hook of hooks) {
           try {
-            exec(`python -m pre_commit run ${hook} --files ${batchFiles.join(' ')}`);
+            execFile('python', ['-m', 'pre_commit', 'run', hook, '--files', ...batchFiles]);
             console.log(`[OK] ${hook} 检查通过`);
           } catch (e) {
             checkFailed = true;
@@ -247,7 +252,7 @@ function commitAndPushAutoFix(prFiles) {
     }
     exec(`git clone -b "${process.env.ATOMGIT_HEAD_REF}" "${forkUrl}" "${randDir}"`);
     for (let diffFile of diffFiles) {
-      exec(`cp "${diffFile}" "${randDir}/${diffFile}"`);
+      fs.copyFileSync(diffFile, path.join(randDir, diffFile));
     }
     exec(`cd "${randDir}" && git config user.name ${USER.login}`);
     exec(`cd "${randDir}" && git config user.email ${USER.email}`);
