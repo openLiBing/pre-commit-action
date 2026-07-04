@@ -332,13 +332,20 @@ async function run() {
 
   console.log('\n===== [3] 定位代码目录 =====');
   const workspace = process.env.WORKSPACE || process.cwd();
+
+  if (!/^[\w\-\/]+$/.test(workspace)) {
+    console.log('[ERROR] Invalid workspace path');
+    process.exit(1);
+  }
+
   let repoPath = '';
 
   if (fs.existsSync(path.join(workspace, 'repo_workspace'))) {
     repoPath = path.join(workspace, 'repo_workspace');
     console.log(`[OK] 使用 repo_workspace: ${repoPath}`);
   } else {
-    const gitDir = execCapture(`find ${workspace} -maxdepth 3 -name ".git" -type d 2>/dev/null | head -1`);
+    const gitDirOutput = execFileSync('find', [workspace, '-maxdepth', '3', '-name', '.git', '-type', 'd'], { encoding: 'utf-8' });
+    const gitDir = gitDirOutput.trim().split('\n')[0];
     if (gitDir) {
       repoPath = path.dirname(gitDir);
       console.log(`[OK] 通过 .git 定位: ${repoPath}`);
