@@ -18,7 +18,20 @@ const GC_TOKEN = getInput('GC_TOKEN');
 
 function getInput(name) {
   const val = process.env[`INPUT_${name.toUpperCase()}`] || '';
-  return val.trim();
+  const trimmed = val.trim();
+
+  if (name === 'extra_args' && trimmed) {
+    const allowedArgs = ['--all', '--all-files', '--help', '--show-diff-on-failure'];
+    const args = trimmed.split(' ');
+    for (const arg of args) {
+      if (!allowedArgs.includes(arg) && !arg.startsWith('--')) {
+        console.log(`[ERROR] Invalid extra_args: ${arg}. Only -- arguments are allowed.`);
+        process.exit(1);
+      }
+    }
+  }
+
+  return trimmed;
 }
 
 function exec(cmd) {
@@ -208,7 +221,7 @@ function runPreCommit(cmdResult, hooks, failExit) {
     }
   } else {
     try {
-      exec(`python -m pre_commit run ${cmdResult.args}`);
+      execFile('python', ['-m', 'pre_commit', 'run', ...cmdResult.args.split(' ')])
       console.log('[INFO] 自定义命令参数执行 pre-commit 检查通过');
       process.exit(0);
     } catch (e) {
