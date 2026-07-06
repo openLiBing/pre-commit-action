@@ -196,20 +196,22 @@ function buildAutoArgs() {
 
   if ((eventName === 'mr' || eventName === 'pull_request') && baseRef && headRef) {
     console.log(`[INFO] 检测到 PR 事件: ${headRef} -> ${baseRef}`);
-    exec(`git config --global core.quotepath false`);
+    execFile('git', ['config', '--global', 'core.quotepath', 'false']);
     execFile('git', ['config', 'user.name', USER.login]);
     execFile('git', ['config', 'user.email', USER.email]);
-    exec(`git fetch origin refs/merge-requests/${process.env.MERGE_REQUEST_IID}/head:pr_${process.env.MERGE_REQUEST_IID}`);
-    exec(`git fetch origin ${baseRef} --unshallow`); // 环境默认拉取深度为1，需要重新拉取，否则merge会失败
-    exec(`git checkout pr_${process.env.MERGE_REQUEST_IID}`);
+    
+    const mergeRequestIid = process.env.MERGE_REQUEST_IID;
+    execFile('git', ['fetch', 'origin', `refs/merge-requests/${mergeRequestIid}/head:pr_${mergeRequestIid}`]);
+    execFile('git', ['fetch', 'origin', baseRef, '--unshallow']);
+    execFile('git', ['checkout', `pr_${mergeRequestIid}`]);
     try {
-      exec(`git merge origin/${baseRef} --no-edit`);
+      execFile('git', ['merge', `origin/${baseRef}`, '--no-edit']);
     } catch (e) {
       console.error("[ERROR] 合并PR修改到目标分支失败，请优先处理冲突 (或检查PR与target是否共享历史)");
       throw e;
     }
-    let diffFiles = execCapture(`git diff ${baseRef}...pr_${process.env.MERGE_REQUEST_IID} --name-only --diff-filter=ACMR`);
-    return { type: 'file', files: diffFiles.split('\n')};
+    const diffFilesOutput = execFileSync('git', ['diff', `${baseRef}...pr_${mergeRequestIid}`, '--name-only', '--diff-filter=ACMR'], { encoding: 'utf-8' });
+    return { type: 'file', files: diffFilesOutput.split('\n')};
   }
   console.log('[INFO] 非 PR 事件，使用 --all 检查全量文件');
   return { type: 'args', args: '--all' };
@@ -297,8 +299,9 @@ function commitAndPushAutoFix(prFiles) {
     }
     execFile('git', ['config', 'user.name', USER.login], { cwd: randDir });
     execFile('git', ['config', 'user.email', USER.email], { cwd: randDir });
-    exec(`cd "${randDir}" && git commit -am "[openlibing.ci] auto fixes by pre-commit"`);
-    exec(`cd "${randDir}" && git push`);
+    execFile('git', ['add', '.'], { cwd: randDir });
+    execFile('git', ['commit', '-m', '[openlibing.ci] auto fixes by pre-commit'], { cwd: randDir });
+    execFile('git', ['push'], { cwd: randDir });
     console.log('[OK] 已成功推送修改到 PR');
   } catch (e) {
     console.log(`[ERROR] 提交或推送失败，请添加有权限推送的 GC_TOKEN`);
@@ -311,24 +314,24 @@ async function run() {
   console.log('===== pre-commit-action 启动 =====');
 
   console.log('\n===== [1] 检查 Python 环境 =====');
-  exec('python --version');
+  execFile('python', ['--version']);
 
   console.log('\n===== [2] 安装 pre-commit =====');
   detectMirrorConfig();
-  exec(`python -m pip config set global.index-url ${PIP_MIRROR}`);
+  execFile('python', ['-m', 'pip', 'config', 'set', 'global.index-url', PIP_MIRROR]);
   console.log('[INFO] 检查 Go 环境...');
   const goVersion = execCapture('go version');
   console.log(`[INFO] goVersion = "${goVersion}"`);
   if (goVersion) {
-    exec(`go env -w GO111MODULE=on`);
-    exec(`go env -w GOPROXY=${GO_PROXY}`);
-    exec(`go env -w GONOSUMDB=*`);
+    execFile('go', ['env', '-w', 'GO111MODULE=on']);
+    execFile('go', ['env', '-w', `GOPROXY=${GO_PROXY}`]);
+    execFile('go', ['env', '-w', 'GONOSUMDB=*']);
   } else {
     console.log('[WARN] Go 未安装，跳过 Go 代理配置');
   }
-  exec(`python -m pip install --upgrade pip --timeout ${PIP_TIMEOUT}`);
-  exec(`python -m pip install pre-commit --timeout ${PIP_TIMEOUT}`);
-  exec('python -m pre_commit --version');
+  execFile('python', ['-m', 'pip', 'install', '--upgrade', 'pip', '--timeout', PIP_TIMEOUT]);
+  execFile('python', ['-m', 'pip', 'install', 'pre-commit', '--timeout', PIP_TIMEOUT]);
+  execFile('python', ['-m', 'pre_commit', '--version']);
 
   console.log('\n===== [3] 定位代码目录 =====');
   const workspace = process.env.WORKSPACE || process.cwd();
