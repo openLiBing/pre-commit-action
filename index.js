@@ -128,7 +128,8 @@ function buildAutoArgs() {
     if (token) {
       const remoteUrl = execCapture('git remote get-url origin');
       if (remoteUrl && remoteUrl.startsWith('https://')) {
-        const authUrl = remoteUrl.replace('https://', `https://oauth2:${token}@`);
+        const encodedToken = encodeURIComponent(token);
+        const authUrl = remoteUrl.replace('https://', `https://oauth2:${encodedToken}@`);
         execCapture(`git remote set-url origin "${authUrl}"`);
       }
     }
