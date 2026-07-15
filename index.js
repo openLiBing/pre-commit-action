@@ -120,8 +120,9 @@ function detectMirrorConfig() {
 function buildAutoArgs() {
   const eventName = (process.env.ATOMGIT_EVENT_NAME || '').toLowerCase();
   const baseRef = process.env.ATOMGIT_BASE_REF || '';
+  console.log(`[INFO] 当前事件: ${eventName || '(未知)'}, 目标分支: ${baseRef || '(无)'}`);
 
-  if ((eventName === 'mr' || eventName === 'pull_request') && baseRef) {
+  if ((eventName === 'mr' || eventName === 'pull_request' || eventName === 'note') && baseRef) {
     console.log(`[INFO] 检测到 PR 事件，目标分支: ${baseRef}`);
 
     const token = getInput('gc_token');
