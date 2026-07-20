@@ -11,7 +11,6 @@ const SPEED_TEST_TIMEOUT = 5;
 let PIP_MIRROR = '';
 let GO_PROXY = '';
 const PIP_TIMEOUT = '120';
-const BATCH_SIZE = 30;
 
 function getInput(name) {
   const val = process.env[`INPUT_${name.toUpperCase()}`] || '';
@@ -155,7 +154,6 @@ function buildAutoArgs() {
 
 function runPreCommit(cmdResult) {
   let checkFailed = false;
-  const failedFiles = [];
 
   if (cmdResult.type === 'skip') {
     console.log('[OK] 无需检查');
@@ -163,18 +161,10 @@ function runPreCommit(cmdResult) {
   }
 
   if (cmdResult.type === 'file') {
-    let batchFiles = [];
-    for (let i = 0; i < cmdResult.files.length; i++) {
-      batchFiles.push(cmdResult.files[i]);
-      if (batchFiles.length === BATCH_SIZE || i === cmdResult.files.length - 1) {
-        try {
-          execFile('python', ['-m', 'pre_commit', 'run', '--files', ...batchFiles]);
-        } catch (e) {
-          checkFailed = true;
-          failedFiles.push(...batchFiles);
-        }
-        batchFiles = [];
-      }
+    try {
+      execFile('python', ['-m', 'pre_commit', 'run', '--files', ...cmdResult.files]);
+    } catch (e) {
+      checkFailed = true;
     }
   } else {
     try {
@@ -186,16 +176,12 @@ function runPreCommit(cmdResult) {
 
   if (checkFailed) {
     console.log('[ERROR] pre-commit 检查失败');
-    if (failedFiles.length > 0) {
-      console.log('[INFO] 检查未通过的文件:');
-      failedFiles.forEach(f => console.log(`   - ${f}`));
-    }
     console.log('\n[INFO] 请在本地执行以下命令修复后重新提交:');
     console.log('1. 安装/初始化环境');
     console.log('   pip install pre-commit && pre-commit install --install-hooks');
     console.log('2. 检查并修复变更文件');
-    if (failedFiles.length > 0) {
-      console.log(`   pre-commit run --files ${failedFiles.join(' ')}`);
+    if (cmdResult.type === 'file') {
+      console.log(`   pre-commit run --files ${cmdResult.files.join(' ')}`);
     } else {
       console.log('   pre-commit run --all-files');
     }

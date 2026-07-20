@@ -35,7 +35,7 @@ jobs:
       - name: setup-python
         uses: setup-python
         with:
-          python-version: '3.11'
+          python-version: '3.14'
 
       - name: run pre-commit
         uses: openlibing-pre-commit-action
@@ -96,7 +96,7 @@ jobs:
       - name: setup-python
         uses: setup-python
         with:
-          python-version: '3.11'
+          python-version: '3.14'
 
       - name: run pre-commit
         uses: openlibing-pre-commit-action
@@ -128,25 +128,16 @@ repos:
 
 > **判断依据**：hooks 的 `repo` 地址以 `https://gitcode.com/` 开头的是 GitCode 镜像仓，云端执行机可直接访问；以 `https://github.com/` 或其他外部地址开头的，需要使用自定义执行机。
 
-## 自动修复
+## GC_TOKEN 配置
 
-当检查项仅包含以下代码风格类 hook 时，支持自动修复并推送修复后的代码：
-
-- `clang-format`
-- `ruff-format`
-- `trailing-whitespace`
-- `end-of-file-fixer`
-
-如果配置了上述以外的其他检查项，则先运行其他检查项，如果通过后，才会运行这些代码风格类的检查和修复。
+`GC_TOKEN` 用于访问私有仓库（私仓）时进行身份认证，区分私仓的访问权限。
 
 ### 配置方式
 
-自动修复需要在组织中配置 Actions 密钥 `GC_TOKEN`，用于修复代码的推送。配置步骤：
+需要在组织中配置 Actions 密钥 `GC_TOKEN`，配置步骤：
 
 1. 进入组织（或仓库）的 **Settings → Secrets → Actions**
-2. 新建密钥，名称为 `GC_TOKEN`，值为具有代码推送权限的访问令牌
-
-> **注意**：未配置 `GC_TOKEN` 时，即使检查项符合自动修复条件，也不会执行自动修复推送。
+2. 新建密钥，名称为 `GC_TOKEN`，值为具有代码访问权限的访问令牌
 
 ## 注意事项
 
