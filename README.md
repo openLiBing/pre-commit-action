@@ -41,7 +41,6 @@ jobs:
         uses: openlibing-pre-commit-action
         with:
           extra_args: ${{ inputs.extra_args }}
-          gc_token: ${{ inputs.GC_TOKEN }}
 ```
 
 > **关于 `runs-on`**：`'self-hosted'` 为固定必填项，表示使用自定义执行机；后续标签（如 `'os=ubuntu'`、`'arch=x64'`）需与执行机注册时设置的标签一致，流水线将根据标签精确调度到对应的执行机。
