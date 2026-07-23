@@ -185,9 +185,11 @@ function runPreCommit(cmdResult) {
     } else {
       console.log('   pre-commit run --all-files');
     }
+    console.log('\n如需了解更多告警屏蔽、pre-commit配置等信息，请查阅: https://gitcode.com/openlibing/docs/blob/main/static-code-analysis/solutions/pre-commit-solution.md');
     process.exit(1);
   }
   console.log('[OK] pre-commit 检查通过');
+  console.log('如需了解更多告警屏蔽、pre-commit配置等信息，请查阅: https://gitcode.com/openlibing/docs/blob/main/static-code-analysis/solutions/pre-commit-solution.md');
 }
 
 async function run() {
