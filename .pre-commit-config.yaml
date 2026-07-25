@@ -19,22 +19,10 @@ repos:
 
   # ===================== 敏感信息扫描 =====================
   #- repo: https://github.com/Yelp/detect-secrets
-  - repo: https://gitcode.com/gh_mirrors/de/detect-secrets # 使用gitcode镜像加速
-    rev: v1.5.0
+  - repo: https://gitcode.com/GitHub_Trending/gi/gitleaks
+    rev: v8.30.1
     hooks:
-      - id: detect-secrets
-        exclude: |
-          (?x)^(
-              nginx/nginx_beta\.conf|
-              nginx/nginx_gamma\.conf|
-              nginx/nginx_prod\.conf|
-              pnpm-lock.yaml
-          )$
-
-  # ===================== Python 语言 ==========
-  # ruff官方接入指导：https://docs.astral.sh/ruff/integrations/#pre-commit
-  #   # 如需自定义检查规则，
-  #- repo: https://github.com/astral-sh/ruff-pre-commit
+      - id: gitleaks
   - repo: https://gitcode.com/gh_mirrors/ru/ruff-pre-commit # 使用gitcode镜像加速
     rev: v0.15.8
     hooks:
