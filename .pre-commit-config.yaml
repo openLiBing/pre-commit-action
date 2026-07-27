@@ -23,16 +23,7 @@ repos:
     rev: v8.30.1
     hooks:
       - id: gitleaks
-  - repo: https://gitcode.com/gh_mirrors/ru/ruff-pre-commit # 使用gitcode镜像加速
-    rev: v0.15.8
-    hooks:
-      # 代码格式化：缩进、换行、空格、引号风格、行宽、括号位置、注释对齐、空行规范等
-      - id: ruff-format
-      # 静态代码分析：未使用变量、未定义变量、死代码、类型错误、导入未排序、PEP8 违规、代码异味、安全漏洞等
-      - id: ruff-check
-        args: [
-            '--fix' # 可选，启用自动修复（如未使用的导入、未使用变量等）
-          ]
+
   - repo: local
     hooks:
       - id: prettier
