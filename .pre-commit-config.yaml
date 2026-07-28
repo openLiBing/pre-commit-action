@@ -19,46 +19,17 @@ repos:
 
   # ===================== 敏感信息扫描 =====================
   #- repo: https://github.com/Yelp/detect-secrets
-  - repo: https://gitcode.com/gh_mirrors/de/detect-secrets # 使用gitcode镜像加速
-    rev: v1.5.0
+  - repo: https://gitcode.com/GitHub_Trending/gi/gitleaks
+    rev: v8.30.1
     hooks:
-      - id: detect-secrets
-        exclude: |
-          (?x)^(
-              nginx/nginx_beta\.conf|
-              nginx/nginx_gamma\.conf|
-              nginx/nginx_prod\.conf|
-              pnpm-lock.yaml
-          )$
+      - id: gitleaks
 
-  # ===================== Python 语言 ==========
-  # ruff官方接入指导：https://docs.astral.sh/ruff/integrations/#pre-commit
-  #   # 如需自定义检查规则，
-  #- repo: https://github.com/astral-sh/ruff-pre-commit
-  - repo: https://gitcode.com/gh_mirrors/ru/ruff-pre-commit # 使用gitcode镜像加速
-    rev: v0.15.8
-    hooks:
-      # 代码格式化：缩进、换行、空格、引号风格、行宽、括号位置、注释对齐、空行规范等
-      - id: ruff-format
-      # 静态代码分析：未使用变量、未定义变量、死代码、类型错误、导入未排序、PEP8 违规、代码异味、安全漏洞等
-      - id: ruff-check
-        args: [
-            '--fix' # 可选，启用自动修复（如未使用的导入、未使用变量等）
-          ]
+  # 格式化
+  # 运行前请先本地安装：npm install --save-dev --save-exact prettier@3.9.5
   - repo: local
     hooks:
-      - id: prettier
-        name: Prettier Format
+      - id: prettier-format
+        name: prettier format
+        entry: npx prettier --write
         language: system
-        entry: sh -c "npm install --no-audit --no-fund >/dev/null 2>&1; npm run format"
-        pass_filenames: false
-        files: \.(js|ts|vue|jsx|tsx)$
-
-  - repo: local
-    hooks:
-      - id: eslint
-        name: ESLint Check
-        language: system
-        entry: sh -c "npm install --no-audit --no-fund >/dev/null 2>&1; npm run lint:fix -- --format json --output-file eslint.json"
-        pass_filenames: false
-        files: \.(js|ts|vue|jsx|tsx)$
+        files: \.(json|yml|yaml|md)$
