@@ -1,40 +1,40 @@
-name: 'openlibing-pre-commit-action'
+name: "openlibing-pre-commit-action"
 version: 1.0.29
-author: 'test-devops'
-description: '安装 pre-commit 并对代码仓库执行钩子检查'
+author: "test-devops"
+description: "安装 pre-commit 并对代码仓库执行钩子检查"
 
 inputs:
   gc_token:
-    description: 'pre-commit 自动修复时所需密钥'
+    description: "pre-commit 自动修复时所需密钥"
     required: false
-    default: ''
+    default: ""
     layout:
-      type: 'input'
-      label: '运行参数'
-      extend_prop:
-        visible_conditions: [ ]
-        disabled_conditions: [ ]
-      validation:
-        required_message: ''
-  extra_args:
-    description: 'pre-commit 运行参数。为空时自动判断：PR事件检查增量文件，非PR检查全量；填写时按指定参数执行'
-    required: false
-    default: ''
-    layout:
-      type: 'input'
-      label: '运行参数'
+      type: "input"
+      label: "运行参数"
       extend_prop:
         visible_conditions: []
         disabled_conditions: []
       validation:
-        required_message: ''
+        required_message: ""
+  extra_args:
+    description: "pre-commit 运行参数。为空时自动判断：PR事件检查增量文件，非PR检查全量；填写时按指定参数执行"
+    required: false
+    default: ""
+    layout:
+      type: "input"
+      label: "运行参数"
+      extend_prop:
+        visible_conditions: []
+        disabled_conditions: []
+      validation:
+        required_message: ""
 
 outputs:
   result:
-    description: 'pre-commit 运行结果：success 或 failed'
+    description: "pre-commit 运行结果：success 或 failed"
   checked_files:
-    description: 'pre-commit 检查的文件范围'
+    description: "pre-commit 检查的文件范围"
 
 runs:
-  using: 'node16'
-  main: 'dist/index.js'
+  using: "node16"
+  main: "dist/index.js"

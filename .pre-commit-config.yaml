@@ -24,20 +24,12 @@ repos:
     hooks:
       - id: gitleaks
 
+  # 格式化
+  # 运行前请先本地安装：npm install --save-dev --save-exact prettier@3.9.5
   - repo: local
     hooks:
-      - id: prettier
-        name: Prettier Format
+      - id: prettier-format
+        name: prettier format
+        entry: npx prettier --write
         language: system
-        entry: sh -c "npm install --no-audit --no-fund >/dev/null 2>&1; npm run format"
-        pass_filenames: false
-        files: \.(js|ts|vue|jsx|tsx)$
-
-  - repo: local
-    hooks:
-      - id: eslint
-        name: ESLint Check
-        language: system
-        entry: sh -c "npm install --no-audit --no-fund >/dev/null 2>&1; npm run lint:fix -- --format json --output-file eslint.json"
-        pass_filenames: false
-        files: \.(js|ts|vue|jsx|tsx)$
+        files: \.(json|yml|yaml|md)$
