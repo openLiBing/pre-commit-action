@@ -2,6 +2,7 @@
 pre-commit-action
 gitcode-action.md
 
+.idea
 dist/
 node_modules/
 
