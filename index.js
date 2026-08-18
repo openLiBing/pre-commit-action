@@ -17,9 +17,19 @@ function getInput(name) {
   const trimmed = val.trim();
 
   if (name === 'extra_args' && trimmed) {
-    const allowedArgs = ['--all', '--all-files', '--help', '--show-diff-on-failure'];
+    const allowedArgs = ['--all', '--all-files', '--help', '--show-diff-on-failure', '--from-ref', '--to-ref', '--files'];
+    const argsWithValue = ['--from-ref', '--to-ref', '--files'];
     const args = trimmed.split(' ');
+    let skipNext = false;
     for (const arg of args) {
+      if (skipNext) {
+        skipNext = false;
+        continue;
+      }
+      if (argsWithValue.includes(arg)) {
+        skipNext = true;
+        continue;
+      }
       if (!allowedArgs.includes(arg) && !arg.startsWith('--')) {
         console.log(`[ERROR] Invalid extra_args: ${arg}. Only -- arguments are allowed.`);
         process.exit(1);

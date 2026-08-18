@@ -1,5 +1,5 @@
 name: "openlibing-pre-commit-action"
-version: 1.0.30
+version: 1.0.31
 author: "test-devops"
 description: "安装 pre-commit 并对代码仓库执行钩子检查"
 
