@@ -222,7 +222,22 @@ async function run() {
   } else {
     console.log('[WARN] Go 未安装，跳过 Go 代理配置');
   }
-  execFile('python', ['-m', 'pip', 'install', '--upgrade', 'pip', '--timeout', PIP_TIMEOUT]);
+  const MIN_PIP_VERSION = '21.0';
+  const pipVersionOutput = execCapture('python -m pip --version');
+  const pipVersionMatch = pipVersionOutput.match(/pip\s+(\d+\.\d+)/);
+  if (pipVersionMatch) {
+    const currentVersion = parseFloat(pipVersionMatch[1]);
+    const minVersion = parseFloat(MIN_PIP_VERSION);
+    if (currentVersion >= minVersion) {
+      console.log(`[OK] pip ${pipVersionMatch[1]} 已安装且 >= ${MIN_PIP_VERSION}，跳过升级`);
+    } else {
+      console.log(`[INFO] pip ${pipVersionMatch[1]} < ${MIN_PIP_VERSION}，使用 --ignore-installed 升级（避免卸载系统 pip 失败）`);
+      execFile('python', ['-m', 'pip', 'install', '--ignore-installed', '--upgrade', 'pip', '--timeout', PIP_TIMEOUT]);
+    }
+  } else {
+    console.log('[INFO] pip 未安装，开始安装 pip');
+    execFile('python', ['-m', 'pip', 'install', '--upgrade', 'pip', '--timeout', PIP_TIMEOUT]);
+  }
   execFile('python', ['-m', 'pip', 'install', 'pre-commit', '--timeout', PIP_TIMEOUT]);
   execFile('python', ['-m', 'pre_commit', '--version']);
 
