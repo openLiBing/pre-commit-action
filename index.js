@@ -147,15 +147,8 @@ function buildAutoArgs() {
     console.log(`[INFO] 拉取目标分支 origin/${baseRef} 以获取增量文件`);
     execFile('git', ['fetch', 'origin', baseRef]);
 
-    const diffFilesOutput = execFileSync('git', ['diff', 'FETCH_HEAD', '--name-only', '--diff-filter=ACMR'], { encoding: 'utf-8' });
-    const files = diffFilesOutput.split('\n').filter(f => f.trim());
-    if (files.length === 0) {
-      console.log('[INFO] PR 无变更文件，跳过增量检查');
-      return { type: 'skip' };
-    }
-    console.log(`[INFO] PR 增量文件 (${files.length} 个):`);
-    files.forEach(f => console.log(`  - ${f}`));
-    return { type: 'file', files: files };
+    console.log(`[INFO] 使用 --from-ref FETCH_HEAD --to-ref HEAD 增量检查`);
+    return { type: 'args', args: `--from-ref FETCH_HEAD --to-ref HEAD` };
   }
 
   console.log('[INFO] 非 PR 事件，使用 --all-files 检查全量文件');
@@ -170,18 +163,10 @@ function runPreCommit(cmdResult) {
     return;
   }
 
-  if (cmdResult.type === 'file') {
-    try {
-      execFile('python', ['-m', 'pre_commit', 'run', '--files', ...cmdResult.files]);
-    } catch (e) {
-      checkFailed = true;
-    }
-  } else {
-    try {
-      execFile('python', ['-m', 'pre_commit', 'run', ...cmdResult.args.split(' ')]);
-    } catch (e) {
-      checkFailed = true;
-    }
+  try {
+    execFile('python', ['-m', 'pre_commit', 'run', ...cmdResult.args.split(' ')]);
+  } catch (e) {
+    checkFailed = true;
   }
 
   if (checkFailed) {
@@ -190,11 +175,7 @@ function runPreCommit(cmdResult) {
     console.log('1. 安装/初始化环境');
     console.log('   pip install pre-commit && pre-commit install --install-hooks');
     console.log('2. 检查并修复变更文件');
-    if (cmdResult.type === 'file') {
-      console.log(`   pre-commit run --files ${cmdResult.files.join(' ')}`);
-    } else {
-      console.log('   pre-commit run --all-files');
-    }
+    console.log(`   pre-commit run ${cmdResult.args}`);
     console.log('\n如需了解更多告警屏蔽、pre-commit配置等信息，请查阅: https://gitcode.com/openlibing/docs/blob/main/static-code-analysis/solutions/pre-commit-solution.md');
     process.exit(1);
   }
