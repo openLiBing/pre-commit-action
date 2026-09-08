@@ -175,7 +175,7 @@ function runPreCommit(cmdResult) {
     console.log('1. 安装/初始化环境');
     console.log('   pip install pre-commit && pre-commit install --install-hooks');
     console.log('2. 检查并修复变更文件');
-    console.log(`   pre-commit run ${cmdResult.args}`);
+    console.log('   pre-commit run --all-files');
     console.log('\n如需了解更多告警屏蔽、pre-commit配置等信息，请查阅: https://gitcode.com/openlibing/docs/blob/main/static-code-analysis/solutions/pre-commit-solution.md');
     process.exit(1);
   }
