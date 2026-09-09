@@ -1,4 +1,4 @@
-# openlibing-pre-commit-action
+# pre-commit-action
 
 > [!WARNING]
 > **弃用公告**：本仓库已迁移至 [openlibing/pre-commit-action](https://gitcode.com/openlibing/pre-commit-action)，新仓库将不再携带 `openlibing` 前缀。
@@ -43,7 +43,7 @@ jobs:
           python-version: "3.14"
 
       - name: run pre-commit
-        uses: openlibing-pre-commit-action
+        uses: pre-commit-action
         with:
           extra_args: ${{ inputs.extra_args }}
 ```
@@ -103,7 +103,7 @@ jobs:
           python-version: "3.14"
 
       - name: run pre-commit
-        uses: openlibing-pre-commit-action
+        uses: pre-commit-action
         with:
           extra_args: ${{ inputs.extra_args }}
 ```

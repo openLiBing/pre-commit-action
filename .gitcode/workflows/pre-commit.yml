@@ -61,7 +61,7 @@ stages:
               cache: true
 
           - name: pre-commit
-            uses: openlibing-pre-commit-action
+            uses: pre-commit-action
             with:
               extra_args: ${{ inputs.extra_args }}
 
