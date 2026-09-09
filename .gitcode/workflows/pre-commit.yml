@@ -2,6 +2,9 @@ name: pre-commit
 
 on:
   workflow_dispatch:
+  push: # 推送时也执行 pre-commit 检查
+    branches:
+      - "*"
   pull_request_target: # 使用 pull_request_target 确保 PR 流水线始终读取默认分支（master）的最新配置文件
     branches:
       - "*"
@@ -40,7 +43,7 @@ stages:
           - name: Checkout repository
             uses: checkout
             with:
-              ref: ${{ atomgit.event.pull_request.merge_commit_sha || atomgit.event.pull_request.head.sha }} # 使用预合并后的 commit SHA 进行检出，确保 CI 检查的是 PR 与目标分支合并后的最终代码状态
+              ref: ${{ atomgit.event.pull_request.merge_commit_sha || atomgit.event.pull_request.head.sha || atomgit.sha }} # 使用预合并后的 commit SHA 进行检出，确保 CI 检查的是 PR 与目标分支合并后的最终代码状态；push 事件时回退到 atomgit.sha
 
           - name: setup-node
             uses: setup-node
@@ -61,7 +64,7 @@ stages:
               cache: true
 
           - name: pre-commit
-            uses: pre-commit-action
+            uses: openlibing/pre-commit-action@v1.0.0
             with:
               extra_args: ${{ inputs.extra_args }}
 
