@@ -1,6 +1,7 @@
 # pre-commit配置，首次使用需执行以下命令确保生效，可在代码提交前拦截并检查
 # pip install pre-commit  # 安装pre-commit工具
 # pre-commit install  # 安装git hook，请在代码仓根目录执行
+exclude: ^dist/ # 排除构建产物目录
 repos:
   # ===================== 通用基础钩子（所有语言） =====================
   #- repo: https://github.com/pre-commit/pre-commit-hooks
