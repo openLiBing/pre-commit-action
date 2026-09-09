@@ -1,5 +1,10 @@
 # openlibing-pre-commit-action
 
+> [!WARNING]
+> **弃用公告**：本仓库已迁移至 [openlibing/pre-commit-action](https://gitcode.com/openlibing/pre-commit-action)，新仓库将不再携带 `openlibing` 前缀。
+> 请将流水线中的 `uses: openlibing-pre-commit-action` 替换为 `uses: pre-commit-action`。
+> 本仓库处于维护模式（仅修复严重缺陷），将在过渡期结束后归档下线。
+
 ## 简介
 
 安装 pre-commit 并对代码仓库执行钩子检查。支持 PR 增量检查和全量检查自动切换。

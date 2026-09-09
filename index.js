@@ -187,6 +187,13 @@ async function run() {
   const extraArgs = getInput('extra_args');
   console.log('===== pre-commit-action 启动 =====');
 
+  console.log('\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!');
+  console.log('[弃用警告] 本 Action 已迁移至新仓库 pre-commit-action（不再携带 openlibing 前缀）。');
+  console.log('[弃用警告] 请将流水线中的 uses: openlibing-pre-commit-action 替换为 uses: pre-commit-action。');
+  console.log('[弃用警告] 新仓库地址: https://gitcode.com/openlibing/pre-commit-action');
+  console.log('[弃用警告] 本仓库将进入维护模式并逐步下线，请尽快完成切换。');
+  console.log('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n');
+
   console.log('\n===== [1] 检查 Python 环境 =====');
   execFile('python', ['--version']);
 
