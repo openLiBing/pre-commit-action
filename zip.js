@@ -13,6 +13,6 @@ const zip = new AdmZip();
 zip.addLocalFile("./README.md");
 zip.addLocalFile("./action.yml");
 zip.addLocalFolder("./dist", "./dist");
-zip.writeZip("./openlibing-pre-commit-action.zip");
+zip.writeZip("./pre-commit-action.zip");
 
-console.log("ZIP package created: openlibing-pre-commit-action.zip");
+console.log("ZIP package created: pre-commit-action.zip");

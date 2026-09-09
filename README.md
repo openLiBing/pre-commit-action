@@ -1,4 +1,4 @@
-# openlibing-pre-commit-action
+# pre-commit-action
 
 ## 简介
 
@@ -38,7 +38,7 @@ jobs:
           python-version: "3.14"
 
       - name: run pre-commit
-        uses: openlibing-pre-commit-action
+        uses: pre-commit-action
         with:
           extra_args: ${{ inputs.extra_args }}
           gc_token: ${{ inputs.GC_TOKEN }}
@@ -99,7 +99,7 @@ jobs:
           python-version: "3.14"
 
       - name: run pre-commit
-        uses: openlibing-pre-commit-action
+        uses: pre-commit-action
         with:
           extra_args: ${{ inputs.extra_args }}
 ```
