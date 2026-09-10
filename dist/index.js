@@ -218,7 +218,20 @@ function fetchPrFiles(apiUrl, repo, prNumber, token) {
   }
   try {
     const data = JSON.parse(body);
-    return data.map(f => f.filename);
+    console.log(`[INFO] API 返回数据类型: ${Array.isArray(data) ? 'array' : typeof data}, keys: ${Object.keys(data).slice(0, 10).join(',')}`);
+    // 兼容不同 API 返回格式：数组 或 { files: [...] } 或 { data: [...] }
+    let files = [];
+    if (Array.isArray(data)) {
+      files = data;
+    } else if (Array.isArray(data.files)) {
+      files = data.files;
+    } else if (Array.isArray(data.data)) {
+      files = data.data;
+    } else {
+      console.log(`[WARN] API 返回结构未知: ${body.substring(0, 500)}`);
+      return [];
+    }
+    return files.map(f => f.filename || f.name || f.file_path || '').filter(Boolean);
   } catch (e) {
     console.log(`[WARN] 解析 PR 文件列表失败: ${e.message}`);
     return [];
