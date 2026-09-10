@@ -137,6 +137,15 @@ function buildAutoArgs() {
     console.log(`[INFO] 拉取目标分支 origin/${baseRef} 以获取增量文件`);
     execFile('git', ['fetch', 'origin', baseRef]);
 
+    const diffFilesOutput = execFileSync('git', ['diff', 'FETCH_HEAD', '--name-only', '--diff-filter=ACMR'], { encoding: 'utf-8' });
+    const files = diffFilesOutput.split('\n').filter(f => f.trim());
+    if (files.length === 0) {
+      console.log('[INFO] PR 无变更文件，跳过增量检查');
+      return { type: 'skip' };
+    }
+    console.log(`[INFO] PR 增量文件 (${files.length} 个):`);
+    files.forEach(f => console.log(`  - ${f}`));
+
     console.log(`[INFO] 使用 --from-ref FETCH_HEAD --to-ref HEAD 增量检查`);
     return { type: 'args', args: `--from-ref FETCH_HEAD --to-ref HEAD` };
   }
