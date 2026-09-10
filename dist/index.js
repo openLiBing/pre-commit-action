@@ -200,55 +200,6 @@ function detectMirrorConfig() {
   }
 }
 
-function fetchPrFiles(apiUrl, repo, prNumber, token) {
-  const url = `${apiUrl}/api/v5/repos/${repo}/pulls/${prNumber}/files.json?access_token=${encodeURIComponent(token)}&per_page=100`;
-  const output = execCapture(`curl -s -w "\\nHTTP_CODE:%{http_code}" "${url}"`);
-  if (!output) return [];
-  const httpCodeMatch = output.match(/HTTP_CODE:(\d+)/);
-  const httpCode = httpCodeMatch ? httpCodeMatch[1] : '0';
-  const body = output.replace(/\nHTTP_CODE:\d+$/, '');
-  if (httpCode !== '200') return [];
-  try {
-    const data = JSON.parse(body);
-    let files = [];
-    if (Array.isArray(data)) {
-      files = data;
-    } else if (Array.isArray(data.diffs)) {
-      files = data.diffs;
-    } else if (Array.isArray(data.files)) {
-      files = data.files;
-    } else if (Array.isArray(data.data)) {
-      files = data.data;
-    } else {
-      return [];
-    }
-    return files.map(f => f.filename || f.name || f.file_path || f.statistic?.new_path || f.statistic?.path || '').filter(Boolean);
-  } catch (e) {
-    return [];
-  }
-}
-
-function findPrNumberByBranch(apiUrl, repo, headBranch, baseBranch, token) {
-  const url = `${apiUrl}/api/v5/repos/${repo}/pulls?access_token=${encodeURIComponent(token)}&state=open&per_page=100`;
-  const output = execCapture(`curl -s -w "\\nHTTP_CODE:%{http_code}" "${url}"`);
-  if (!output) return '';
-  const httpCodeMatch = output.match(/HTTP_CODE:(\d+)/);
-  const httpCode = httpCodeMatch ? httpCodeMatch[1] : '0';
-  const body = output.replace(/\nHTTP_CODE:\d+$/, '');
-  if (httpCode !== '200') return '';
-  try {
-    const prs = JSON.parse(body);
-    const matched = prs.find(pr => {
-      const head = (pr.head?.ref || '').replace(/^refs\/heads\//, '');
-      const base = (pr.base?.ref || '').replace(/^refs\/heads\//, '');
-      return head === headBranch && base === baseBranch;
-    });
-    return matched ? String(matched.number) : '';
-  } catch (e) {
-    return '';
-  }
-}
-
 function buildAutoArgs() {
   const eventName = (process.env.ATOMGIT_EVENT_NAME || '').toLowerCase();
   const baseRef = process.env.ATOMGIT_BASE_REF || '';
@@ -256,46 +207,6 @@ function buildAutoArgs() {
 
   if ((eventName === 'mr' || eventName === 'pull_request' || eventName === 'note') && baseRef) {
     console.log(`[INFO] 检测到 PR 事件，目标分支: ${baseRef}`);
-
-    const autoToken = process.env.ATOMGIT_TOKEN || '';
-    const repo = process.env.ATOMGIT_REPOSITORY || '';
-    // 从 git remote URL 推导 API 域名
-    let apiUrl = '';
-    const remoteUrl = execCapture('git remote get-url origin') || '';
-    const remoteMatch = remoteUrl.match(/https?:\/\/([^\/]+)/);
-    if (remoteMatch) {
-      apiUrl = `https://api.${remoteMatch[1]}`;
-    }
-    if (!apiUrl) {
-      apiUrl = process.env.ATOMGIT_API_URL || 'https://api.gitcode.com';
-    }
-
-    let prNumber = '';
-    const eventPath = process.env.ATOMGIT_EVENT_PATH || '';
-    if (eventPath && fs.existsSync(eventPath)) {
-      try {
-        const eventData = JSON.parse(fs.readFileSync(eventPath, { encoding: 'utf-8' }));
-        prNumber = eventData.pull_request?.number || eventData.number || '';
-      } catch (e) { }
-    }
-
-    if (!prNumber && autoToken && repo) {
-      const headRef = process.env.ATOMGIT_HEAD_REF || execCapture('git rev-parse --abbrev-ref HEAD') || '';
-      if (headRef) {
-        prNumber = findPrNumberByBranch(apiUrl, repo, headRef, baseRef, autoToken);
-      }
-    }
-
-    if (prNumber) {
-      console.log(`[INFO] 获取 PR #${prNumber} 变更文件列表`);
-      const files = fetchPrFiles(apiUrl, repo, prNumber, autoToken);
-      if (files.length > 0) {
-        console.log(`[INFO] PR 增量文件 (${files.length} 个):`);
-        files.forEach(f => console.log(`  - ${f}`));
-      } else {
-        console.log('[INFO] API 未获取到变更文件列表');
-      }
-    }
 
     console.log(`[INFO] 拉取目标分支 origin/${baseRef} 以获取增量文件`);
     execFile('git', ['fetch', 'origin', baseRef]);
