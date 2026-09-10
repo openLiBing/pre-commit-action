@@ -26021,12 +26021,12 @@ function buildAutoArgs() {
 }
 
 function runPreCommit(cmdResult) {
-  let checkFailed = false;
-
   if (cmdResult.type === 'skip') {
     console.log('[OK] 无需检查');
-    return;
+    return false;
   }
+
+  let checkFailed = false;
 
   if (cmdResult.type === 'file') {
     try {
@@ -26054,10 +26054,12 @@ function runPreCommit(cmdResult) {
       console.log('   pre-commit run --all-files');
     }
     console.log('\n如需了解更多告警屏蔽、pre-commit配置等信息，请查阅: https://gitcode.com/openlibing/docs/blob/main/static-code-analysis/solutions/pre-commit-solution.md');
-    process.exit(1);
+    // 不在此退出：pre-commit 失败时扫描报告同样有价值，报告上传完成后由 run() 统一按失败状态退出
+    return true;
   }
   console.log('[OK] pre-commit 检查通过');
   console.log('如需了解更多告警屏蔽、pre-commit配置等信息，请查阅: https://gitcode.com/openlibing/docs/blob/main/static-code-analysis/solutions/pre-commit-solution.md');
+  return false;
 }
 
 /** 是否为 PR 类型触发（PR 触发不进行报告扫描上传回调）。与 buildAutoArgs 的 PR 判断保持一致。 */
@@ -26242,9 +26244,14 @@ async function run() {
   }
 
   console.log('\n===== [6] 运行 pre-commit 检查 =====');
-  runPreCommit(cmdResult);
+  const preCommitFailed = runPreCommit(cmdResult);
 
   await uploadScanReports();
+
+  if (preCommitFailed) {
+    console.log('[ERROR] pre-commit 检查失败，扫描报告已上传，任务按失败状态退出');
+    process.exit(1);
+  }
 }
 
 run().catch(err => {
