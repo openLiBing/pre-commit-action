@@ -53,7 +53,7 @@ jobs:
           python-version: "3.14"
 
       - name: run pre-commit
-        uses: pre-commit-action
+        uses: openlibing/pre-commit-action@v1.0.0
         with:
           extra_args: ${{ inputs.extra_args }}
 ```
@@ -116,7 +116,7 @@ jobs:
           python-version: "3.14"
 
       - name: run pre-commit
-        uses: pre-commit-action
+        uses: openlibing/pre-commit-action@v1.0.0
         with:
           extra_args: ${{ inputs.extra_args }}
 ```
