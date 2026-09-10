@@ -25789,6 +25789,7 @@ const OBS_BUCKET = 'openlibing-gitcode-action'; // openlibing 账号固定 OBS �
 const OBS_KEY_PREFIX = 'pre-commit-reports'; // 与 CodeArts 结果前缀 code-arts-check-results 区分
 const OBS_READ_ENDPOINT = 'https://openlibing-gitcode-action.obs.cn-southwest-2.myhuaweicloud.com';
 const APIG_CALLBACK_URL = 'https://apig.openlibing.com:443/openlibing-codecheck/codescan/v1/result/receive';
+const APIG_CALLBACK_URL_BETA = 'https://174e1b821a8446f38998a67186ba766e.apic.cn-southwest-2.huaweicloudapis.com/openlibing-codecheck/codescan/v1/result/receive';
 const APIG_CALLBACK_CATEGORY = 'pre-commit';
 
 function getInput(name) {
@@ -26055,6 +26056,10 @@ async function uploadScanReports() {
   }
 
   console.log('\n===== [9] APIG 回调 openlibing 后端 =====');
+  // 根据 env-type input 显式选择回调地址（prod 走正式域名，beta 走华为云 APIG 实例域名）
+  const isBetaEnv = (getInput('env-type') || 'prod').toLowerCase() === 'beta';
+  const finalCallbackUrl = isBetaEnv ? APIG_CALLBACK_URL_BETA : APIG_CALLBACK_URL;
+  console.log(`[INFO] 环境类型: ${isBetaEnv ? 'beta (测试环境)' : 'prod (正式环境)'}`);
   const callbackPayload = {
     repoUrl: process.env.ATOMGIT_REPOSITORY_URL || '',
     pipelineId: process.env.ATOMGIT_PIPELINE_ID || '',
@@ -26068,9 +26073,11 @@ async function uploadScanReports() {
     sourceRunUrl: ''
   };
   try {
-    const res = await callApig('POST', APIG_CALLBACK_URL, null, JSON.stringify(callbackPayload));
+    const res = await callApig('POST', finalCallbackUrl, null, JSON.stringify(callbackPayload));
     console.log(`[INFO] 回调响应: HTTP ${res.status}`);
     console.log('[OK] APIG 回调发送成功');
+    const resultViewUrl = isBetaEnv ? 'https://beta.openlibing.com/apps/codeCheck' : 'https://www.openlibing.com/apps/codeCheck';
+    console.log(`[INFO] 查看上传结果解析: ${resultViewUrl}`);
   } catch (cbErr) {
     console.log(`[WARN] APIG 回调发送失败: ${cbErr.message}（OBS 上传已成功，不影响最终结果）`);
   }

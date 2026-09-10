@@ -40,6 +40,18 @@ inputs:
         disabled_conditions: []
       validation:
         required_message: ""
+  env-type:
+    description: "回调环境类型：prod（正式环境 apig.openlibing.com）或 beta（测试环境华为云 APIG 实例域名）"
+    required: false
+    default: "prod"
+    layout:
+      type: "input"
+      label: "回调环境"
+      extend_prop:
+        visible_conditions: []
+        disabled_conditions: []
+      validation:
+        required_message: ""
   debug:
     description: "开启 SDK 调试定位日志（请求/响应详情，敏感字段自动脱敏）"
     required: false
