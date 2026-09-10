@@ -149,6 +149,8 @@ function fetchPrFiles(apiUrl, repo, prNumber, token) {
     let files = [];
     if (Array.isArray(data)) {
       files = data;
+    } else if (Array.isArray(data.diffs)) {
+      files = data.diffs;
     } else if (Array.isArray(data.files)) {
       files = data.files;
     } else if (Array.isArray(data.data)) {
@@ -157,7 +159,7 @@ function fetchPrFiles(apiUrl, repo, prNumber, token) {
       console.log(`[WARN] API 返回结构未知: ${body.substring(0, 500)}`);
       return [];
     }
-    return files.map(f => f.filename || f.name || f.file_path || '').filter(Boolean);
+    return files.map(f => f.filename || f.name || f.file_path || f.statistic?.new_path || f.statistic?.path || '').filter(Boolean);
   } catch (e) {
     console.log(`[WARN] 解析 PR 文件列表失败: ${e.message}`);
     return [];
