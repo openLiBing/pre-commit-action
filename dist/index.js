@@ -25317,12 +25317,16 @@ exports.z = function (fn) {
 
 
 /**
- * gitleaks JSON 报告 → SARIF 2.1.0 转换器。
+ * pre-commit 扫描报告 → SARIF 2.1.0 转换器。
  *
  * 纯函数模块（无 IO），便于单元测试与独立复用。
- * 输入为 gitleaks --report-format json 产出的 findings 数组：
- *   [{ RuleID, Description, StartLine, EndLine, StartColumn, EndColumn,
- *      Match, Secret, File, Commit, Entropy, Author, Email, Date, Message, Tags }]
+ * 支持两种工具的 JSON 报告：
+ *   - gitleaks（--report-format json 产出的 findings 数组）：
+ *     [{ RuleID, Description, StartLine, EndLine, StartColumn, EndColumn,
+ *        Match, Secret, File, Commit, Entropy, Author, Email, Date, Message, Tags }]
+ *   - detect-secrets（scan 输出的对象）：
+ *     { generated_at, plugins_used: [{name,...}], version,
+ *       results: { <file>: [{type, filename, hashed_secret, is_verified, line_number}] } }
  * 输出为符合 SARIF 2.1.0 规范的扫描结果对象。
  */
 
@@ -25415,7 +25419,88 @@ function convertGitleaksToSarif(findings, opts = {}) {
   };
 }
 
-module.exports = { convertGitleaksToSarif };
+/**
+ * 将 detect-secrets JSON 报告转换为 SARIF 2.1.0 对象。
+ * @param {Object} report detect-secrets scan 输出（含 results 对象）
+ * @param {Object} [opts]
+ * @param {string} [opts.toolVersion] 覆盖 tool.driver.version
+ * @returns {Object} SARIF 2.1.0 对象
+ * @throws {Error} 报告缺少 results 对象时抛出
+ */
+function convertDetectSecretsToSarif(report, opts = {}) {
+  if (!report || typeof report !== 'object' || !report.results || typeof report.results !== 'object') {
+    throw new Error('detect-secrets 报告格式不正确：应为包含 results 对象的 JSON');
+  }
+
+  // 收集全部 secret 与去重后的检测类型（ruleId 使用检测类型，与 rules 一一对应）
+  const typeSet = new Set();
+  const secretList = [];
+  for (const [file, secrets] of Object.entries(report.results)) {
+    for (const s of Array.isArray(secrets) ? secrets : []) {
+      if (!s || typeof s !== 'object') {
+        continue;
+      }
+      if (s.type) {
+        typeSet.add(s.type);
+      }
+      secretList.push({ file, secret: s });
+    }
+  }
+
+  const rules = [...typeSet].map((t) => ({
+    id: t,
+    name: t,
+    shortDescription: { text: `detect-secrets: ${t}` },
+    fullDescription: { text: `detect-secrets 检测类型：${t}` }
+  }));
+
+  const results = secretList.map(({ file, secret: s }) => {
+    const type = s.type || 'Secret';
+    const line = s.line_number || 1;
+    const result = {
+      ruleId: type,
+      level: s.is_verified ? 'error' : 'warning',
+      message: { text: `在 ${file} 第 ${line} 行检测到 ${type}` },
+      locations: [
+        {
+          physicalLocation: {
+            artifactLocation: { uri: file },
+            region: { startLine: line }
+          }
+        }
+      ]
+    };
+
+    const props = {};
+    if (s.hashed_secret) props.hashedSecret = s.hashed_secret;
+    if (typeof s.is_verified === 'boolean') props.isVerified = s.is_verified;
+    if (s.filename) props.filename = s.filename;
+    if (Object.keys(props).length > 0) {
+      result.properties = props;
+    }
+    return result;
+  });
+
+  return {
+    $schema: 'https://json.schemastore.org/sarif-2.1.0.json',
+    version: '2.1.0',
+    runs: [
+      {
+        tool: {
+          driver: {
+            name: 'detect-secrets',
+            version: opts.toolVersion || report.version || '',
+            informationUri: 'https://github.com/Yelp/detect-secrets',
+            rules
+          }
+        },
+        results
+      }
+    ]
+  };
+}
+
+module.exports = { convertGitleaksToSarif, convertDetectSecretsToSarif };
 
 
 /***/ }),
@@ -25772,7 +25857,7 @@ const path = __nccwpck_require__(6928);
 const os = __nccwpck_require__(857);
 const ObsClient = __nccwpck_require__(1728);
 const { callApig, configure, getCredentials } = __nccwpck_require__(8620);
-const { convertGitleaksToSarif } = __nccwpck_require__(1564);
+const { convertGitleaksToSarif, convertDetectSecretsToSarif } = __nccwpck_require__(1564);
 
 const PIP_MIRROR_DEFAULT = 'https://mirrors.huaweicloud.com/repository/pypi/simple';
 const GO_PROXY_DEFAULT = 'https://mirrors.huaweicloud.com/repository/goproxy/';
@@ -25982,17 +26067,20 @@ function isPrEvent() {
   return (eventName === 'mr' || eventName === 'pull_request' || eventName === 'note') && baseRef;
 }
 
-/** 将 gitleaks JSON 报告转为 SARIF 文件（写入 os.tmpdir），返回 { name, sarifPath }。 */
+/** 将扫描 JSON 报告转为 SARIF 文件（写入 os.tmpdir），返回 { name, sarifPath }。按文件名前缀分发转换器。 */
 function buildSarifFile(jsonPath) {
-  const findings = JSON.parse(fs.readFileSync(jsonPath, 'utf-8'));
-  const sarif = convertGitleaksToSarif(findings);
-  const name = path.basename(jsonPath, '.json') + '.sarif';
+  const basename = path.basename(jsonPath);
+  const raw = JSON.parse(fs.readFileSync(jsonPath, 'utf-8'));
+  const sarif = basename.startsWith('detect-secrets')
+    ? convertDetectSecretsToSarif(raw)
+    : convertGitleaksToSarif(raw);
+  const name = basename.replace(/\.json$/, '') + '.sarif';
   const sarifPath = path.join(os.tmpdir(), name);
   fs.writeFileSync(sarifPath, JSON.stringify(sarif, null, 2), 'utf-8');
   return { name, sarifPath };
 }
 
-/** 扫描报告上传：报告 → SARIF → OBS → APIG 回调。仅处理 gitleaks JSON 报告，PR 类型触发跳过。 */
+/** 扫描报告上传：报告 → SARIF → OBS → APIG 回调。仅处理 gitleaks/detect-secrets JSON 报告，PR 类型触发跳过。 */
 async function uploadScanReports() {
   console.log('\n===== [7] 报告扫描上传（报告 → SARIF → OBS → APIG 回调） =====');
 
@@ -26008,13 +26096,13 @@ async function uploadScanReports() {
   }
 
   const reportFiles = fs.readdirSync(reportDir)
-    .filter(f => f.endsWith('.json') && f.startsWith('gitleaks'))
+    .filter(f => f.endsWith('.json') && (f.startsWith('gitleaks') || f.startsWith('detect-secrets')))
     .sort();
   if (reportFiles.length === 0) {
-    console.log(`[INFO] 报告目录中无 gitleaks JSON 报告，跳过报告上传: ${reportDir}`);
+    console.log(`[INFO] 报告目录中无 gitleaks/detect-secrets JSON 报告，跳过报告上传: ${reportDir}`);
     return;
   }
-  console.log(`[OK] 发现 ${reportFiles.length} 个 gitleaks 报告:`);
+  console.log(`[OK] 发现 ${reportFiles.length} 个扫描报告:`);
   reportFiles.forEach(f => console.log(`  - ${f}`));
 
   const workflowRunId = process.env.ATOMGIT_RUN_ID || process.env.PIPELINE_RUN_ID || '';

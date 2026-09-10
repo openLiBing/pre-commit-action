@@ -4,7 +4,7 @@ const path = require('path');
 const os = require('os');
 const ObsClient = require('esdk-obs-nodejs');
 const { callApig, configure, getCredentials } = require('@openlibing/huaweicloud-oidc-client');
-const { convertGitleaksToSarif } = require('./sarif-converter');
+const { convertGitleaksToSarif, convertDetectSecretsToSarif } = require('./sarif-converter');
 
 const PIP_MIRROR_DEFAULT = 'https://mirrors.huaweicloud.com/repository/pypi/simple';
 const GO_PROXY_DEFAULT = 'https://mirrors.huaweicloud.com/repository/goproxy/';
@@ -214,17 +214,20 @@ function isPrEvent() {
   return (eventName === 'mr' || eventName === 'pull_request' || eventName === 'note') && baseRef;
 }
 
-/** 将 gitleaks JSON 报告转为 SARIF 文件（写入 os.tmpdir），返回 { name, sarifPath }。 */
+/** 将扫描 JSON 报告转为 SARIF 文件（写入 os.tmpdir），返回 { name, sarifPath }。按文件名前缀分发转换器。 */
 function buildSarifFile(jsonPath) {
-  const findings = JSON.parse(fs.readFileSync(jsonPath, 'utf-8'));
-  const sarif = convertGitleaksToSarif(findings);
-  const name = path.basename(jsonPath, '.json') + '.sarif';
+  const basename = path.basename(jsonPath);
+  const raw = JSON.parse(fs.readFileSync(jsonPath, 'utf-8'));
+  const sarif = basename.startsWith('detect-secrets')
+    ? convertDetectSecretsToSarif(raw)
+    : convertGitleaksToSarif(raw);
+  const name = basename.replace(/\.json$/, '') + '.sarif';
   const sarifPath = path.join(os.tmpdir(), name);
   fs.writeFileSync(sarifPath, JSON.stringify(sarif, null, 2), 'utf-8');
   return { name, sarifPath };
 }
 
-/** 扫描报告上传：报告 → SARIF → OBS → APIG 回调。仅处理 gitleaks JSON 报告，PR 类型触发跳过。 */
+/** 扫描报告上传：报告 → SARIF → OBS → APIG 回调。仅处理 gitleaks/detect-secrets JSON 报告，PR 类型触发跳过。 */
 async function uploadScanReports() {
   console.log('\n===== [7] 报告扫描上传（报告 → SARIF → OBS → APIG 回调） =====');
 
@@ -240,13 +243,13 @@ async function uploadScanReports() {
   }
 
   const reportFiles = fs.readdirSync(reportDir)
-    .filter(f => f.endsWith('.json') && f.startsWith('gitleaks'))
+    .filter(f => f.endsWith('.json') && (f.startsWith('gitleaks') || f.startsWith('detect-secrets')))
     .sort();
   if (reportFiles.length === 0) {
-    console.log(`[INFO] 报告目录中无 gitleaks JSON 报告，跳过报告上传: ${reportDir}`);
+    console.log(`[INFO] 报告目录中无 gitleaks/detect-secrets JSON 报告，跳过报告上传: ${reportDir}`);
     return;
   }
-  console.log(`[OK] 发现 ${reportFiles.length} 个 gitleaks 报告:`);
+  console.log(`[OK] 发现 ${reportFiles.length} 个扫描报告:`);
   reportFiles.forEach(f => console.log(`  - ${f}`));
 
   const workflowRunId = process.env.ATOMGIT_RUN_ID || process.env.PIPELINE_RUN_ID || '';

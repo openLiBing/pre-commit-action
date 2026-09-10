@@ -2,18 +2,18 @@
 
 ## 简介
 
-安装 pre-commit 并对代码仓库执行钩子检查。支持 PR 增量检查和全量检查自动切换。非 PR 类型触发时，会读取约定报告目录下的 gitleaks JSON 扫描报告，转换为 SARIF 2.1.0 上传到 OBS，并回调 openlibing 后端。
+安装 pre-commit 并对代码仓库执行钩子检查。支持 PR 增量检查和全量检查自动切换。非 PR 类型触发时，会读取约定报告目录下的扫描报告（gitleaks / detect-secrets JSON），转换为 SARIF 2.1.0 上传到 OBS，并回调 openlibing 后端。
 
 ## 输入参数
 
 | 参数       | 说明                                                                                           | 必填 | 默认值         |
 | ---------- | ---------------------------------------------------------------------------------------------- | ---- | -------------- |
 | extra_args | pre-commit 运行参数。为空时自动判断：PR 事件检查增量文件，非 PR 检查全量；填写时按指定参数执行 | 否   | 空（自动判断） |
-| report-dir | 各工具扫描报告约定目录（机器临时目录，非代码仓目录）。插件读取该目录下 gitleaks JSON 报告，转 SARIF 上传 OBS 并回调 openlibing 后端。PR 类型触发不进行报告上传回调 | 否   | /tmp/pre-commit-reports/ |
+| report-dir | 各工具扫描报告约定目录（机器临时目录，非代码仓目录）。插件读取该目录下 gitleaks / detect-secrets JSON 报告，转 SARIF 上传 OBS 并回调 openlibing 后端。PR 类型触发不进行报告上传回调 | 否   | /tmp/pre-commit-reports/ |
 | env-type   | 回调环境类型：prod（正式环境 apig.openlibing.com）或 beta（测试环境华为云 APIG 实例域名） | 否   | prod          |
 | debug      | 开启 SDK 调试定位日志（请求/响应详情，敏感字段自动脱敏）                                        | 否   | false          |
 
-> **报告上传约定**：需在 `.pre-commit-config.yaml` 中为 gitleaks 钩子配置报告输出参数（`--report-path /tmp/pre-commit-reports/gitleaks.json --report-format json`），插件读取该目录下的 `gitleaks*.json` 转 SARIF 上传。PR 类型触发（mr / pull_request / note）不做报告扫描上传回调。
+> **报告上传约定**：需将扫描报告生成到约定目录——gitleaks 钩子配置 `--report-path /tmp/pre-commit-reports/gitleaks.json --report-format json`；detect-secrets 在 workflow 中执行 `detect-secrets scan > /tmp/pre-commit-reports/detect-secrets.json`。插件读取该目录下的 `gitleaks*.json` / `detect-secrets*.json` 转 SARIF 上传。PR 类型触发（mr / pull_request / note）不做报告扫描上传回调。
 
 ## 输出参数
 
@@ -76,13 +76,13 @@ repos:
     hooks:
       - id: black
 
-  # ❌ GitHub 仓库 — gitleaks 敏感信息扫描，需要自定义执行机
-  # 安装说明：自动安装依赖 Go 运行环境，有外网代理可自动编译安装（200M+）
-  - repo: https://github.com/gitleaks/gitleaks
-    rev: v8.30.1
+  # ❌ GitHub 仓库 — detect-secrets 敏感信息扫描，需要自定义执行机
+  # 安装说明：纯 Python，pip 安装（网络要求低）；首次使用需生成 baseline：detect-secrets scan > .secrets.baseline
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
     hooks:
-      - id: gitleaks
-        entry: gitleaks dir
+      - id: detect-secrets
+        args: ["--baseline", ".secrets.baseline"]
 ```
 
 ### 云端执行机（仅使用 GitCode 镜像仓的 hooks）
@@ -122,13 +122,13 @@ repos:
       - id: trailing-whitespace
       - id: end-of-file-fixer
 
-  # ✅ GitCode 镜像仓 — gitleaks 敏感信息扫描，国内网络可使用镜像仓加速下载
-  # 安装说明：自动安装依赖 Go 运行环境，国内网络无代理建议先手动下载并安装 Go 环境：https://golang.google.cn/dl
-  - repo: https://gitcode.com/GitHub_Trending/gi/gitleaks
-    rev: v8.30.1
+  # ✅ GitCode 镜像仓 — detect-secrets 敏感信息扫描，国内网络可使用镜像仓加速下载
+  # 安装说明：纯 Python，pip 安装（网络要求低）；首次使用需生成 baseline：detect-secrets scan > .secrets.baseline
+  - repo: https://gitcode.com/gh_mirrors/de/detect-secrets
+    rev: v1.5.0
     hooks:
-      - id: gitleaks
-        entry: gitleaks dir
+      - id: detect-secrets
+        args: ["--baseline", ".secrets.baseline"]
 ```
 
 > **判断依据**：hooks 的 `repo` 地址以 `https://gitcode.com/` 开头的是 GitCode 镜像仓，云端执行机可直接访问；以 `https://github.com/` 或其他外部地址开头的，需要使用自定义执行机。
