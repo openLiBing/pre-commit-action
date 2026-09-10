@@ -22,6 +22,74 @@
 | result        | 运行结果：success 或 failed |
 | checked_files | 检查的文件范围              |
 
+## 报告上传与回调（可选能力）
+
+非 PR 类型触发（push / workflow_dispatch / schedule）时，插件会读取约定报告目录下所有 `*.sarif`，上传 OBS（对象公共读）并 APIG 回调 openlibing 后端归档扫描结果。**SARIF 转换由业务仓负责**，插件不感知具体工具、不内置任何转换器。
+
+### 前置条件
+
+- workflow 必须声明 `permissions.id-token: write`（OIDC 免密换证必需，换取华为云临时凭证，非 secret）：
+
+```yaml
+permissions:
+  repository: read
+  id-token: write # OIDC 免密换证必需
+```
+
+### 报告契约
+
+1. 各工具钩子把原始报告（JSON 等）输出到约定目录（默认 `/tmp/pre-commit-reports/`，input `report-dir` 可覆盖）
+2. 业务仓将原始报告转换为 SARIF 2.1.0，文件名 `<tool>.sarif` 写入同一约定目录
+3. 插件读取该目录下所有 `*.sarif` 上传 OBS 并回调
+
+以 detect-secrets 为例（内聚方案，`require_serial` 避免并发竞争）：
+
+```yaml
+# .pre-commit-config.yaml
+- repo: local
+  hooks:
+    - id: detect-secrets-report
+      name: detect-secrets-report
+      entry: bash scripts/detect-secrets-report.sh # 扫描生成 JSON + 调用转换脚本输出 SARIF + baseline 拦截
+      language: system
+      require_serial: true
+      types: [ text ]
+```
+
+```yaml
+# .gitcode/workflows/pre-commit-report.yml
+on:
+  workflow_dispatch:
+permissions:
+  repository: read
+  id-token: write # OIDC 免密换证必需
+jobs:
+  pre-commit-report:
+    runs-on: ['codearts-hosted', 'ubuntu-latest', 'x64', 'slim']
+    steps:
+      - name: Checkout repository
+        uses: checkout
+      - name: setup-python
+        uses: setup-python
+        with:
+          version: 3.14
+          cache: true
+      - name: Install detect-secrets
+        run: python -m pip install detect-secrets==1.5.0 --timeout 120 || exit 1
+      - name: run pre-commit (report upload)
+        uses: openlibing/pre-commit-action@v1.0.30
+        with:
+          report-dir: /tmp/pre-commit-reports/
+          env-type: beta # prod 正式环境 apig.openlibing.com / beta 华为云 APIG 实例域名
+          debug: 'false'
+```
+
+### 行为说明
+
+- **PR 类型触发**（mr / pull_request / note）只做检查，不进行报告上传回调
+- **检查失败仍上传**：pre-commit 失败时已生成的报告仍会上传，随后按失败标志退出
+- **上传/回调失败仅告警**，不阻断检查结果；回调会校验 HTTP 状态 + 响应体业务码（后端业务错误恒为 HTTP 200，只看状态会误报成功）
+
 ## 使用示例
 
 ### 推荐方式：使用自定义执行机（推荐）
@@ -43,7 +111,7 @@ jobs:
           python-version: "3.14"
 
       - name: run pre-commit
-        uses: openlibing/pre-commit-action@v1.0.0
+        uses: openlibing/pre-commit-action@v1.0.30
         with:
           extra_args: ${{ inputs.extra_args }}
           gc_token: ${{ inputs.GC_TOKEN }}
@@ -104,7 +172,7 @@ jobs:
           python-version: "3.14"
 
       - name: run pre-commit
-        uses: openlibing/pre-commit-action@v1.0.0
+        uses: openlibing/pre-commit-action@v1.0.30
         with:
           extra_args: ${{ inputs.extra_args }}
 ```
