@@ -221,6 +221,15 @@ function buildAutoArgs() {
     console.log(`[INFO] 拉取目标分支 origin/${baseRef} 以获取增量文件`);
     execFile('git', ['fetch', 'origin', baseRef]);
 
+    const diffFilesOutput = execFileSync('git', ['diff', 'FETCH_HEAD', '--name-only', '--diff-filter=ACMR'], { encoding: 'utf-8' });
+    const files = diffFilesOutput.split('\n').filter(f => f.trim());
+    if (files.length === 0) {
+      console.log('[INFO] PR 无变更文件，跳过增量检查');
+      return { type: 'skip' };
+    }
+    console.log(`[INFO] PR 增量文件 (${files.length} 个):`);
+    files.forEach(f => console.log(`  - ${f}`));
+
     console.log(`[INFO] 使用 --from-ref FETCH_HEAD --to-ref HEAD 增量检查`);
     return { type: 'args', args: `--from-ref FETCH_HEAD --to-ref HEAD` };
   }
@@ -250,16 +259,23 @@ function runPreCommit(cmdResult) {
     console.log('   pip install pre-commit && pre-commit install --install-hooks');
     console.log('2. 检查并修复变更文件');
     console.log('   pre-commit run --all-files');
-    console.log('\n如需了解更多告警屏蔽、pre-commit配置等信息，请查阅: https://gitcode.com/openlibing/docs/blob/main/static-code-analysis/solutions/pre-commit-solution.md');
+    console.log('\n如需了解更多告警屏蔽、pre-commit配置等信息，请查阅: https://gitcode.com/openlibing/docs/blob/main/static-code-analysis/solutions/pre-commit/README.md');
     process.exit(1);
   }
   console.log('[OK] pre-commit 检查通过');
-  console.log('如需了解更多告警屏蔽、pre-commit配置等信息，请查阅: https://gitcode.com/openlibing/docs/blob/main/static-code-analysis/solutions/pre-commit-solution.md');
+  console.log('如需了解更多告警屏蔽、pre-commit配置等信息，请查阅: https://gitcode.com/openlibing/docs/blob/main/static-code-analysis/solutions/pre-commit/README.md');
 }
 
 async function run() {
   const extraArgs = getInput('extra_args');
   console.log('===== pre-commit-action 启动 =====');
+
+  console.log('\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!');
+  console.log('[弃用警告] 本 Action 已迁移至新仓库 pre-commit-action（不再携带 openlibing 前缀）。');
+  console.log('[弃用警告] 请将流水线中的 uses: openlibing-pre-commit-action 替换为 uses: pre-commit-action。');
+  console.log('[弃用警告] 新仓库地址: https://gitcode.com/openlibing/pre-commit-action');
+  console.log('[弃用警告] 本仓库将进入维护模式并逐步下线，请尽快完成切换。');
+  console.log('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n');
 
   console.log('\n===== [1] 检查 Python 环境 =====');
   execFile('python', ['--version']);
