@@ -50052,7 +50052,8 @@ async function uploadScanReports() {
     for (const sf of sarifFiles) {
       const objectKey = `${objectKeyPrefix}/${sf.name}`;
       console.log(`[INFO] 上传 ${objectKey}`);
-      const result = await client.putObject({ Bucket: OBS_BUCKET, Key: objectKey, SourceFile: sf.sarifPath });
+      // ACL: 'public-read'：后端 SarifParseServiceImpl 通过匿名 HTTP GET 下载，对象必须公共读
+      const result = await client.putObject({ Bucket: OBS_BUCKET, Key: objectKey, SourceFile: sf.sarifPath, ACL: 'public-read' });
       const msg = (result && result.CommonMsg) || {};
       if (!(msg.Status >= 200 && msg.Status < 300)) {
         throw new Error(`OBS upload failed (${msg.Status})${msg.Code ? ' [' + msg.Code + ']' : ''}: ${msg.Message || '未知错误'}`);
