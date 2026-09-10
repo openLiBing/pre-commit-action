@@ -253,8 +253,19 @@ function buildAutoArgs() {
     console.log(`[INFO] 检测到 PR 事件，目标分支: ${baseRef}`);
 
     const autoToken = process.env.ATOMGIT_TOKEN || '';
-    const apiUrl = process.env.ATOMGIT_API_URL || 'https://api.gitcode.com';
     const repo = process.env.ATOMGIT_REPOSITORY || '';
+    // 从 git remote URL 推导 API 域名，避免 ATOMGIT_API_URL 指向错误域名
+    let apiUrl = '';
+    const remoteUrl = execCapture('git remote get-url origin') || '';
+    console.log(`[INFO] git remote URL: ${remoteUrl}`);
+    const remoteMatch = remoteUrl.match(/https?:\/\/([^\/]+)/);
+    if (remoteMatch) {
+      const host = remoteMatch[1];
+      apiUrl = `https://api.${host}`;
+    }
+    if (!apiUrl) {
+      apiUrl = process.env.ATOMGIT_API_URL || 'https://api.gitcode.com';
+    }
     console.log(`[INFO] API 配置: repo=${repo || '(空)'}, apiUrl=${apiUrl}, token=${autoToken ? '(已设置)' : '(未设置)'}`);
 
     let prNumber = '';
