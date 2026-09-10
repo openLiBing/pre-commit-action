@@ -4,20 +4,8 @@ author: "test-devops"
 description: "安装 pre-commit 并对代码仓库执行钩子检查"
 
 inputs:
-  gc_token:
-    description: "pre-commit 自动修复时所需密钥"
-    required: false
-    default: ""
-    layout:
-      type: "input"
-      label: "运行参数"
-      extend_prop:
-        visible_conditions: []
-        disabled_conditions: []
-      validation:
-        required_message: ""
   extra_args:
-    description: "pre-commit 运行参数。为空时自动判断：PR事件检查增量文件，非PR检查全量；填写时按指定参数执行"
+    description: "pre-commit 运行参数。为空时使用 --all-files 检查全量文件；填写时按指定参数执行"
     required: false
     default: ""
     layout:

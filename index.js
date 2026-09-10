@@ -134,27 +134,8 @@ function buildAutoArgs() {
   if ((eventName === 'mr' || eventName === 'pull_request' || eventName === 'note') && baseRef) {
     console.log(`[INFO] 检测到 PR 事件，目标分支: ${baseRef}`);
 
-    const token = getInput('gc_token');
-    if (token) {
-      const remoteUrl = execCapture('git remote get-url origin');
-      if (remoteUrl && remoteUrl.startsWith('https://')) {
-        const encodedToken = encodeURIComponent(token);
-        const authUrl = remoteUrl.replace('https://', `https://oauth2:${encodedToken}@`);
-        execCapture(`git remote set-url origin "${authUrl}"`);
-      }
-    }
-
     console.log(`[INFO] 拉取目标分支 origin/${baseRef} 以获取增量文件`);
     execFile('git', ['fetch', 'origin', baseRef]);
-
-    const diffFilesOutput = execFileSync('git', ['diff', 'FETCH_HEAD', '--name-only', '--diff-filter=ACMR'], { encoding: 'utf-8' });
-    const files = diffFilesOutput.split('\n').filter(f => f.trim());
-    if (files.length === 0) {
-      console.log('[INFO] PR 无变更文件，跳过增量检查');
-      return { type: 'skip' };
-    }
-    console.log(`[INFO] PR 增量文件 (${files.length} 个):`);
-    files.forEach(f => console.log(`  - ${f}`));
 
     console.log(`[INFO] 使用 --from-ref FETCH_HEAD --to-ref HEAD 增量检查`);
     return { type: 'args', args: `--from-ref FETCH_HEAD --to-ref HEAD` };
@@ -196,14 +177,7 @@ async function run() {
   const extraArgs = getInput('extra_args');
   console.log('===== pre-commit-action 启动 =====');
 
-  console.log('\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!');
-  console.log('[弃用警告] 本 Action 已迁移至新仓库 pre-commit-action（不再携带 openlibing 前缀）。');
-  console.log('[弃用警告] 请将流水线中的 uses: openlibing-pre-commit-action 替换为 uses: pre-commit-action。');
-  console.log('[弃用警告] 新仓库地址: https://gitcode.com/openlibing/pre-commit-action');
-  console.log('[弃用警告] 本仓库将进入维护模式并逐步下线，请尽快完成切换。');
-  console.log('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n');
-
-  console.log('\n===== [1] 检查 Python 环境 =====');
+console.log('\n===== [1] 检查 Python 环境 =====');
   execFile('python', ['--version']);
 
   console.log('\n===== [2] 安装 pre-commit =====');
