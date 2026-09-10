@@ -49786,8 +49786,11 @@ const REPORT_DIR_DEFAULT = '/tmp/pre-commit-reports/'; // 各工具扫描报告�
 const OBS_BUCKET = 'openlibing-gitcode-action'; // openlibing 账号固定 OBS 桶（公网匿名可读）
 const OBS_KEY_PREFIX = 'pre-commit-reports'; // 与 CodeArts 结果前缀 code-arts-check-results 区分
 const OBS_READ_ENDPOINT = 'https://openlibing-gitcode-action.obs.cn-southwest-2.myhuaweicloud.com';
-const APIG_CALLBACK_URL = 'https://apig.openlibing.com:443/openlibing-codecheck/codescan/v1/result/receive';
-const APIG_CALLBACK_URL_BETA = 'https://174e1b821a8446f38998a67186ba766e.apic.cn-southwest-2.huaweicloudapis.com/openlibing-codecheck/codescan/v1/result/receive';
+// APIG 回调地址必须使用 /action-api 前缀（网关 IAM 认证，V11 签名 + X-Security-Token）。
+// 注意：/openlibing-codecheck 前缀是 APP 认证分组（upload-sarif 用 AppKey/AppSecret HMAC），
+// 对 V11 IAM 签名返回 401，不得混用。与 openlibing-spotbugs-action / openlibing-codecheck-to-sarif 保持一致。
+const APIG_CALLBACK_URL = 'https://apig.openlibing.com/action-api/codescan/v1/result/receive';
+const APIG_CALLBACK_URL_BETA = 'https://174e1b821a8446f38998a67186ba766e.apic.cn-southwest-2.huaweicloudapis.com/action-api/codescan/v1/result/receive';
 const APIG_CALLBACK_CATEGORY = 'pre-commit';
 
 function getInput(name) {
@@ -50082,7 +50085,14 @@ async function uploadScanReports() {
   try {
     const res = await callApig('POST', finalCallbackUrl, null, JSON.stringify(callbackPayload));
     console.log(`[INFO] 回调响应: HTTP ${res.status}`);
-    console.log('[OK] APIG 回调发送成功');
+    if (res.status >= 200 && res.status < 300) {
+      console.log('[OK] APIG 回调发送成功');
+    } else {
+      const respText = res.data && typeof res.data === 'object' && 'raw' in res.data
+        ? res.data.raw
+        : JSON.stringify(res.data || {});
+      console.log(`[WARN] APIG 回调返回异常状态码 HTTP ${res.status}，响应: ${respText}`);
+    }
     const resultViewUrl = isBetaEnv ? 'https://beta.openlibing.com/apps/codeCheck' : 'https://www.openlibing.com/apps/codeCheck';
     console.log(`[INFO] 查看上传结果解析: ${resultViewUrl}`);
   } catch (cbErr) {
