@@ -10,7 +10,10 @@
   },
   "author": "test-devops",
   "license": "ISC",
-  "dependencies": {},
+  "dependencies": {
+    "@openlibing/huaweicloud-oidc-client": "^0.0.5",
+    "esdk-obs-nodejs": "^3.26.2"
+  },
   "devDependencies": {
     "@vercel/ncc": "^0.38.1",
     "adm-zip": "^0.5.16"

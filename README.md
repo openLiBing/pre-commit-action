@@ -2,13 +2,17 @@
 
 ## 简介
 
-安装 pre-commit 并对代码仓库执行钩子检查。支持 PR 增量检查和全量检查自动切换。
+安装 pre-commit 并对代码仓库执行钩子检查。支持 PR 增量检查和全量检查自动切换。非 PR 类型触发时，会读取约定报告目录下的 gitleaks JSON 扫描报告，转换为 SARIF 2.1.0 上传到 OBS，并回调 openlibing 后端。
 
 ## 输入参数
 
 | 参数       | 说明                                                                                           | 必填 | 默认值         |
 | ---------- | ---------------------------------------------------------------------------------------------- | ---- | -------------- |
 | extra_args | pre-commit 运行参数。为空时自动判断：PR 事件检查增量文件，非 PR 检查全量；填写时按指定参数执行 | 否   | 空（自动判断） |
+| report-dir | 各工具扫描报告约定目录（机器临时目录，非代码仓目录）。插件读取该目录下 gitleaks JSON 报告，转 SARIF 上传 OBS 并回调 openlibing 后端。PR 类型触发不进行报告上传回调 | 否   | /tmp/pre-commit-reports/ |
+| debug      | 开启 SDK 调试定位日志（请求/响应详情，敏感字段自动脱敏）                                        | 否   | false          |
+
+> **报告上传约定**：需在 `.pre-commit-config.yaml` 中为 gitleaks 钩子配置报告输出参数（`--report-path /tmp/pre-commit-reports/gitleaks.json --report-format json`），插件读取该目录下的 `gitleaks*.json` 转 SARIF 上传。PR 类型触发（mr / pull_request / note）不做报告扫描上传回调。
 
 ## 输出参数
 

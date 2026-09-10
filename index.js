@@ -2,6 +2,9 @@ const { execSync, execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const ObsClient = require('esdk-obs-nodejs');
+const { callApig, configure, getCredentials } = require('@openlibing/huaweicloud-oidc-client');
+const { convertGitleaksToSarif } = require('./sarif-converter');
 
 const PIP_MIRROR_DEFAULT = 'https://mirrors.huaweicloud.com/repository/pypi/simple';
 const GO_PROXY_DEFAULT = 'https://mirrors.huaweicloud.com/repository/goproxy/';
@@ -12,8 +15,19 @@ let PIP_MIRROR = '';
 let GO_PROXY = '';
 const PIP_TIMEOUT = '120';
 
+// 报告扫描上传相关常量
+const REPORT_DIR_DEFAULT = '/tmp/pre-commit-reports/'; // 各工具扫描报告约定目录（机器临时目录）
+const OBS_BUCKET = 'openlibing-gitcode-action'; // openlibing 账号固定 OBS 桶（公网匿名可读）
+const OBS_KEY_PREFIX = 'pre-commit-reports'; // 与 CodeArts 结果前缀 code-arts-check-results 区分
+const OBS_READ_ENDPOINT = 'https://openlibing-gitcode-action.obs.cn-southwest-2.myhuaweicloud.com';
+const APIG_CALLBACK_URL = 'https://apig.openlibing.com:443/openlibing-codecheck/codescan/v1/result/receive';
+const APIG_CALLBACK_CATEGORY = 'pre-commit';
+
 function getInput(name) {
-  const val = process.env[`INPUT_${name.toUpperCase()}`] || '';
+  // 兼容连字符与下划线两种命名：report-dir 同时支持 INPUT_REPORT-DIR / INPUT_REPORT_DIR
+  const dashKey = `INPUT_${name.toUpperCase().replace(/-/g, '-')}`;
+  const underscoreKey = `INPUT_${name.toUpperCase().replace(/-/g, '_')}`;
+  const val = process.env[dashKey] || process.env[underscoreKey] || '';
   const trimmed = val.trim();
 
   if (name === 'extra_args' && trimmed) {
@@ -192,6 +206,108 @@ function runPreCommit(cmdResult) {
   console.log('如需了解更多告警屏蔽、pre-commit配置等信息，请查阅: https://gitcode.com/openlibing/docs/blob/main/static-code-analysis/solutions/pre-commit-solution.md');
 }
 
+/** 是否为 PR 类型触发（PR 触发不进行报告扫描上传回调）。与 buildAutoArgs 的 PR 判断保持一致。 */
+function isPrEvent() {
+  const eventName = (process.env.ATOMGIT_EVENT_NAME || '').toLowerCase();
+  const baseRef = process.env.ATOMGIT_BASE_REF || '';
+  return (eventName === 'mr' || eventName === 'pull_request' || eventName === 'note') && baseRef;
+}
+
+/** 将 gitleaks JSON 报告转为 SARIF 文件（写入 os.tmpdir），返回 { name, sarifPath }。 */
+function buildSarifFile(jsonPath) {
+  const findings = JSON.parse(fs.readFileSync(jsonPath, 'utf-8'));
+  const sarif = convertGitleaksToSarif(findings);
+  const name = path.basename(jsonPath, '.json') + '.sarif';
+  const sarifPath = path.join(os.tmpdir(), name);
+  fs.writeFileSync(sarifPath, JSON.stringify(sarif, null, 2), 'utf-8');
+  return { name, sarifPath };
+}
+
+/** 扫描报告上传：报告 → SARIF → OBS → APIG 回调。仅处理 gitleaks JSON 报告，PR 类型触发跳过。 */
+async function uploadScanReports() {
+  console.log('\n===== [7] 报告扫描上传（报告 → SARIF → OBS → APIG 回调） =====');
+
+  if (isPrEvent()) {
+    console.log('[INFO] PR 类型触发，按约定不进行报告扫描上传回调，跳过');
+    return;
+  }
+
+  const reportDir = getInput('report-dir') || REPORT_DIR_DEFAULT;
+  if (!fs.existsSync(reportDir)) {
+    console.log(`[INFO] 报告目录不存在，跳过报告上传: ${reportDir}`);
+    return;
+  }
+
+  const reportFiles = fs.readdirSync(reportDir)
+    .filter(f => f.endsWith('.json') && f.startsWith('gitleaks'))
+    .sort();
+  if (reportFiles.length === 0) {
+    console.log(`[INFO] 报告目录中无 gitleaks JSON 报告，跳过报告上传: ${reportDir}`);
+    return;
+  }
+  console.log(`[OK] 发现 ${reportFiles.length} 个 gitleaks 报告:`);
+  reportFiles.forEach(f => console.log(`  - ${f}`));
+
+  const workflowRunId = process.env.ATOMGIT_RUN_ID || process.env.PIPELINE_RUN_ID || '';
+  const repoName = process.env.ATOMGIT_REPOSITORY || '';
+  const repoBaseName = repoName.split('/').pop() || 'unknown-repo';
+  const objectKeyPrefix = `${OBS_KEY_PREFIX}/${repoBaseName}/${workflowRunId || 'manual'}`;
+
+  const debugEnabled = getInput('debug') === 'true';
+  const { region } = configure({ debug: debugEnabled });
+
+  const sarifFiles = reportFiles.map(f => buildSarifFile(path.join(reportDir, f)));
+
+  console.log(`\n===== [8] OIDC 换证并上传 OBS（${OBS_BUCKET}/${objectKeyPrefix}/） =====`);
+  const cred = await getCredentials();
+  const server = `https://obs.${region}.myhuaweicloud.com`;
+  const client = new ObsClient({
+    access_key_id: cred.accessKeyId,
+    secret_access_key: cred.secretAccessKey,
+    security_token: cred.securityToken,
+    server
+  });
+
+  const sarifUrls = [];
+  try {
+    for (const sf of sarifFiles) {
+      const objectKey = `${objectKeyPrefix}/${sf.name}`;
+      console.log(`[INFO] 上传 ${objectKey}`);
+      const result = await client.putObject({ Bucket: OBS_BUCKET, Key: objectKey, SourceFile: sf.sarifPath });
+      const msg = (result && result.CommonMsg) || {};
+      if (!(msg.Status >= 200 && msg.Status < 300)) {
+        throw new Error(`OBS upload failed (${msg.Status})${msg.Code ? ' [' + msg.Code + ']' : ''}: ${msg.Message || '未知错误'}`);
+      }
+      const sarifUrl = `${OBS_READ_ENDPOINT}/${objectKey}`;
+      sarifUrls.push(sarifUrl);
+      console.log(`[OK] 上传成功: ${sarifUrl}`);
+    }
+  } finally {
+    await client.close();
+  }
+
+  console.log('\n===== [9] APIG 回调 openlibing 后端 =====');
+  const callbackPayload = {
+    repoUrl: process.env.ATOMGIT_REPOSITORY_URL || '',
+    pipelineId: process.env.ATOMGIT_PIPELINE_ID || '',
+    pipelineName: process.env.PIPELINE_NAME || '',
+    pipelineRunId: workflowRunId || '',
+    branch: process.env.ATOMGIT_HEAD_REF || '',
+    commitId: process.env.ATOMGIT_SHA || '',
+    obsUrl: sarifUrls, // 后端 DTO 为 List<String>，必须传数组
+    category: APIG_CALLBACK_CATEGORY,
+    source: 'GITCODE_ACTION',
+    sourceRunUrl: ''
+  };
+  try {
+    const res = await callApig('POST', APIG_CALLBACK_URL, null, JSON.stringify(callbackPayload));
+    console.log(`[INFO] 回调响应: HTTP ${res.status}`);
+    console.log('[OK] APIG 回调发送成功');
+  } catch (cbErr) {
+    console.log(`[WARN] APIG 回调发送失败: ${cbErr.message}（OBS 上传已成功，不影响最终结果）`);
+  }
+}
+
 async function run() {
   const extraArgs = getInput('extra_args');
   console.log('===== pre-commit-action 启动 =====');
@@ -264,6 +380,8 @@ async function run() {
 
   console.log('\n===== [6] 运行 pre-commit 检查 =====');
   runPreCommit(cmdResult);
+
+  await uploadScanReports();
 }
 
 run().catch(err => {

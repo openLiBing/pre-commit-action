@@ -28,6 +28,30 @@ inputs:
         disabled_conditions: []
       validation:
         required_message: ""
+  report-dir:
+    description: "各工具扫描报告约定目录（机器临时目录，非代码仓目录）。插件读取该目录下 gitleaks JSON 报告，转 SARIF 上传 OBS 并回调 openlibing 后端。PR 类型触发不进行报告上传回调"
+    required: false
+    default: "/tmp/pre-commit-reports/"
+    layout:
+      type: "input"
+      label: "报告目录"
+      extend_prop:
+        visible_conditions: []
+        disabled_conditions: []
+      validation:
+        required_message: ""
+  debug:
+    description: "开启 SDK 调试定位日志（请求/响应详情，敏感字段自动脱敏）"
+    required: false
+    default: "false"
+    layout:
+      type: "input"
+      label: "调试模式"
+      extend_prop:
+        visible_conditions: []
+        disabled_conditions: []
+      validation:
+        required_message: ""
 
 outputs:
   result:
