@@ -47479,10 +47479,12 @@ exports.z = function (fn) {
 /***/ }),
 
 /***/ 1564:
-/***/ ((module) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
+
+const crypto = __nccwpck_require__(6982);
 
 /**
  * pre-commit 扫描报告 → SARIF 2.1.0 转换器。
@@ -47497,6 +47499,17 @@ exports.z = function (fn) {
  *       results: { <file>: [{type, filename, hashed_secret, is_verified, line_number}] } }
  * 输出为符合 SARIF 2.1.0 规范的扫描结果对象。
  */
+
+/**
+ * 生成稳定位置 hash（sha256 hex），用于 SARIF result 的
+ * partialFingerprints.primaryLocationLineHash。后端 StandardSarifParser
+ * 从该字段取 locationHashRaw 参与 fingerprintKey 计算，缺失会导致 issue 被跳过。
+ * @param {Array} parts 唯一标识该位置的字段（file/line/type/指纹值等）
+ */
+function _locationHash(parts) {
+  const raw = parts.map((p) => (p === undefined || p === null ? '' : String(p))).join('|');
+  return crypto.createHash('sha256').update(raw, 'utf8').digest('hex');
+}
 
 /** 构造单个 rule 对象（同一 RuleID 去重）。 */
 function _buildRules(findings) {
@@ -47524,6 +47537,9 @@ function _buildResult(f) {
     ruleId: f.RuleID,
     level: 'error',
     message: { text: f.Description || `检测到敏感信息泄露：${f.RuleID}` },
+    partialFingerprints: {
+      primaryLocationLineHash: _locationHash([f.File, f.StartLine, f.StartColumn, f.Commit, f.RuleID])
+    },
     locations: [
       {
         physicalLocation: {
@@ -47629,6 +47645,9 @@ function convertDetectSecretsToSarif(report, opts = {}) {
       ruleId: type,
       level: s.is_verified ? 'error' : 'warning',
       message: { text: `在 ${file} 第 ${line} 行检测到 ${type}` },
+      partialFingerprints: {
+        primaryLocationLineHash: _locationHash([file, line, type, s.hashed_secret])
+      },
       locations: [
         {
           physicalLocation: {
