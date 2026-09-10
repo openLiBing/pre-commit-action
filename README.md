@@ -1,13 +1,20 @@
-# pre-commit-action
-
-> [!WARNING]
-> **弃用公告**：本仓库已迁移至 [openlibing/pre-commit-action](https://gitcode.com/openlibing/pre-commit-action)，新仓库将不再携带 `openlibing` 前缀。
-> 请将流水线中的 `uses: openlibing-pre-commit-action` 替换为 `uses: pre-commit-action`。
-> 本仓库处于维护模式（仅修复严重缺陷），将在过渡期结束后归档下线。
-
 ## 简介
 
 安装 pre-commit 并对代码仓库执行钩子检查。支持 PR 增量检查和全量检查自动切换。
+
+## 工作模式
+
+| 触发事件 | 检查方式 | 说明 |
+| -------- | -------- | ---- |
+| PR（mr/pull_request/note） | `--from-ref FETCH_HEAD --to-ref HEAD` | 仅检查 PR 变更文件，并通过 API 获取变更文件列表打印日志 |
+| 其他事件 | `--all-files` | 全量检查所有文件 |
+
+PR 增量检查流程：
+1. 通过 GitCode API 获取 PR 变更文件列表（用于日志展示）
+2. `git fetch origin baseRef` 拉取目标分支
+3. 执行 `pre-commit run --from-ref FETCH_HEAD --to-ref HEAD`
+
+> API 认证使用 CI 自动注入的 `ATOMGIT_TOKEN`，无需手动配置 token。
 
 ## 输入参数
 
@@ -29,6 +36,9 @@
 当 `.pre-commit-config.yaml` 中配置的 hooks 仓库地址不是 GitCode 镜像仓时（例如使用了 GitHub 等外部仓库的 hooks），云端执行机可能无法访问这些外部地址。推荐通过自定义执行机（self-hosted runner）来运行，自定义执行机可以访问外部网络资源。流水线配置如下：
 
 ```yaml
+permissions:
+  pr: read  # PR 增量检查需要读取 PR 信息的权限
+
 jobs:
   pre-commit:
     name: pre-commit
@@ -89,6 +99,9 @@ repos:
 如果 `.pre-commit-config.yaml` 中所有 hooks 均来自 GitCode 镜像仓，可直接使用云端执行机运行，流水线配置如下：
 
 ```yaml
+permissions:
+  pr: read  # PR 增量检查需要读取 PR 信息的权限
+
 jobs:
   pre-commit:
     name: pre-commit
@@ -132,20 +145,11 @@ repos:
 
 > **判断依据**：hooks 的 `repo` 地址以 `https://gitcode.com/` 开头的是 GitCode 镜像仓，云端执行机可直接访问；以 `https://github.com/` 或其他外部地址开头的，需要使用自定义执行机。
 
-## GC_TOKEN 配置
-
-`GC_TOKEN` 用于访问私有仓库（私仓）时进行身份认证，区分私仓的访问权限。
-
-### 配置方式
-
-需要在组织中配置 Actions 密钥 `GC_TOKEN`，配置步骤：
-
-1. 进入组织（或仓库）的 **Settings → Secrets → Actions**
-2. 新建密钥，名称为 `GC_TOKEN`，值为具有代码访问权限的访问令牌
-
 ## 注意事项
 
 - 运行前需先使用 `checkout` 检出代码
 - 运行前需先使用 `setup-python` 配置 Python 环境
 - 项目根目录需包含 `.pre-commit-config.yaml` 配置文件
 - PR 增量检查依赖 `ATOMGIT_BASE_REF` 和 `ATOMGIT_HEAD_REF` 环境变量
+- PR 增量检查需要在 workflow 中配置 `permissions: pr: read`，否则 API 无法读取 PR 信息（403）
+- API 认证使用 CI 自动注入的 `ATOMGIT_TOKEN`，无需手动传入 token
