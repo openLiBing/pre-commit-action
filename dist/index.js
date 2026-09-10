@@ -49985,6 +49985,16 @@ function isPrEvent() {
   return (eventName === 'mr' || eventName === 'pull_request' || eventName === 'note') && baseRef;
 }
 
+/** 回调分支：MR 事件用目标分支（ATOMGIT_HEAD_REF），其他事件用当前 ref（ATOMGIT_REF_NAME）。
+ * 与 openlibing-spotbugs-action 的 resolveBranch 保持一致，避免 workflow_dispatch 等非 MR
+ * 事件下 ATOMGIT_HEAD_REF 为空导致后端校验失败（分支名不能为空）。 */
+function resolveBranch() {
+  const eventName = (process.env.ATOMGIT_EVENT_NAME || '').toLowerCase();
+  return eventName === 'mr'
+    ? (process.env.ATOMGIT_HEAD_REF || '')
+    : (process.env.ATOMGIT_REF_NAME || '');
+}
+
 /** 将扫描 JSON 报告转为 SARIF 文件（写入 os.tmpdir），返回 { name, sarifPath }。按文件名前缀分发转换器。 */
 function buildSarifFile(jsonPath) {
   const basename = path.basename(jsonPath);
@@ -50076,7 +50086,7 @@ async function uploadScanReports() {
     pipelineId: process.env.ATOMGIT_PIPELINE_ID || '',
     pipelineName: process.env.PIPELINE_NAME || '',
     pipelineRunId: workflowRunId || '',
-    branch: process.env.ATOMGIT_HEAD_REF || '',
+    branch: resolveBranch(),
     commitId: process.env.ATOMGIT_SHA || '',
     obsUrl: sarifUrls, // 后端 DTO 为 List<String>，必须传数组
     category: APIG_CALLBACK_CATEGORY,
