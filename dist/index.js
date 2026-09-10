@@ -50096,13 +50096,18 @@ async function uploadScanReports() {
   try {
     const res = await callApig('POST', finalCallbackUrl, null, JSON.stringify(callbackPayload));
     console.log(`[INFO] 回调响应: HTTP ${res.status}`);
-    if (res.status >= 200 && res.status < 300) {
+    const data = res.data;
+    // 后端 GlobalExceptionHandler 对校验失败返回 HTTP 200 + DataResult{code:4010103}，
+    // 业务失败需检查响应体 code 字段（200/0 视为成功），不能只看 HTTP 状态码
+    const isBizOk = data && typeof data === 'object' && !('raw' in data) && (data.code === 200 || data.code === 0);
+    if (res.status >= 200 && res.status < 300 && isBizOk) {
       console.log('[OK] APIG 回调发送成功');
     } else {
-      const respText = res.data && typeof res.data === 'object' && 'raw' in res.data
-        ? res.data.raw
-        : JSON.stringify(res.data || {});
-      console.log(`[WARN] APIG 回调返回异常状态码 HTTP ${res.status}，响应: ${respText}`);
+      const bizCode = data && typeof data === 'object' ? data.code : undefined;
+      const respText = data && typeof data === 'object' && 'raw' in data
+        ? data.raw
+        : JSON.stringify(data || {});
+      console.log(`[WARN] APIG 回调未成功：HTTP ${res.status}${bizCode !== undefined ? `，业务码 ${bizCode}` : ''}，响应: ${respText}`);
     }
     const resultViewUrl = isBetaEnv ? 'https://beta.openlibing.com/apps/codeCheck' : 'https://www.openlibing.com/apps/codeCheck';
     console.log(`[INFO] 查看上传结果解析: ${resultViewUrl}`);
