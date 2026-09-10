@@ -202,24 +202,14 @@ function detectMirrorConfig() {
 
 function fetchPrFiles(apiUrl, repo, prNumber, token) {
   const url = `${apiUrl}/api/v5/repos/${repo}/pulls/${prNumber}/files.json?access_token=${encodeURIComponent(token)}&per_page=100`;
-  console.log(`[INFO] API URL: ${url.replace(token, '***')}`);
   const output = execCapture(`curl -s -w "\\nHTTP_CODE:%{http_code}" "${url}"`);
-  if (!output) {
-    console.log('[WARN] API 请求变更文件列表失败: curl 无输出');
-    return [];
-  }
+  if (!output) return [];
   const httpCodeMatch = output.match(/HTTP_CODE:(\d+)/);
-  const httpCode = httpCodeMatch ? httpCodeMatch[1] : '未知';
+  const httpCode = httpCodeMatch ? httpCodeMatch[1] : '0';
   const body = output.replace(/\nHTTP_CODE:\d+$/, '');
-  console.log(`[INFO] API HTTP 状态码: ${httpCode}`);
-  if (httpCode !== '200') {
-    console.log(`[WARN] API 请求失败: HTTP ${httpCode}, 响应: ${body.substring(0, 500)}`);
-    return [];
-  }
+  if (httpCode !== '200') return [];
   try {
     const data = JSON.parse(body);
-    console.log(`[INFO] API 返回数据类型: ${Array.isArray(data) ? 'array' : typeof data}, keys: ${Object.keys(data).slice(0, 10).join(',')}`);
-    // 兼容不同 API 返回格式：数组 或 { files: [...] } 或 { data: [...] }
     let files = [];
     if (Array.isArray(data)) {
       files = data;
@@ -230,33 +220,22 @@ function fetchPrFiles(apiUrl, repo, prNumber, token) {
     } else if (Array.isArray(data.data)) {
       files = data.data;
     } else {
-      console.log(`[WARN] API 返回结构未知: ${body.substring(0, 500)}`);
       return [];
     }
     return files.map(f => f.filename || f.name || f.file_path || f.statistic?.new_path || f.statistic?.path || '').filter(Boolean);
   } catch (e) {
-    console.log(`[WARN] 解析 PR 文件列表失败: ${e.message}`);
     return [];
   }
 }
 
 function findPrNumberByBranch(apiUrl, repo, headBranch, baseBranch, token) {
   const url = `${apiUrl}/api/v5/repos/${repo}/pulls?access_token=${encodeURIComponent(token)}&state=open&per_page=100`;
-  console.log(`[INFO] 通过 API 查找 PR: head=${headBranch}, base=${baseBranch}`);
-  console.log(`[INFO] PR 列表 API URL: ${url.replace(token, '***')}`);
   const output = execCapture(`curl -s -w "\\nHTTP_CODE:%{http_code}" "${url}"`);
-  if (!output) {
-    console.log('[WARN] API 请求 PR 列表失败: curl 无输出');
-    return '';
-  }
+  if (!output) return '';
   const httpCodeMatch = output.match(/HTTP_CODE:(\d+)/);
-  const httpCode = httpCodeMatch ? httpCodeMatch[1] : '未知';
+  const httpCode = httpCodeMatch ? httpCodeMatch[1] : '0';
   const body = output.replace(/\nHTTP_CODE:\d+$/, '');
-  console.log(`[INFO] PR 列表 HTTP 状态码: ${httpCode}`);
-  if (httpCode !== '200') {
-    console.log(`[WARN] API 请求 PR 列表失败: HTTP ${httpCode}, 响应: ${body.substring(0, 500)}`);
-    return '';
-  }
+  if (httpCode !== '200') return '';
   try {
     const prs = JSON.parse(body);
     const matched = prs.find(pr => {
@@ -264,14 +243,8 @@ function findPrNumberByBranch(apiUrl, repo, headBranch, baseBranch, token) {
       const base = (pr.base?.ref || '').replace(/^refs\/heads\//, '');
       return head === headBranch && base === baseBranch;
     });
-    if (matched) {
-      console.log(`[INFO] 匹配到 PR #${matched.number}`);
-      return String(matched.number);
-    }
-    console.log('[WARN] 未找到匹配的 PR');
-    return '';
+    return matched ? String(matched.number) : '';
   } catch (e) {
-    console.log(`[WARN] 解析 PR 列表失败: ${e.message}`);
     return '';
   }
 }
@@ -286,19 +259,16 @@ function buildAutoArgs() {
 
     const autoToken = process.env.ATOMGIT_TOKEN || '';
     const repo = process.env.ATOMGIT_REPOSITORY || '';
-    // 从 git remote URL 推导 API 域名，避免 ATOMGIT_API_URL 指向错误域名
+    // 从 git remote URL 推导 API 域名
     let apiUrl = '';
     const remoteUrl = execCapture('git remote get-url origin') || '';
-    console.log(`[INFO] git remote URL: ${remoteUrl}`);
     const remoteMatch = remoteUrl.match(/https?:\/\/([^\/]+)/);
     if (remoteMatch) {
-      const host = remoteMatch[1];
-      apiUrl = `https://api.${host}`;
+      apiUrl = `https://api.${remoteMatch[1]}`;
     }
     if (!apiUrl) {
       apiUrl = process.env.ATOMGIT_API_URL || 'https://api.gitcode.com';
     }
-    console.log(`[INFO] API 配置: repo=${repo || '(空)'}, apiUrl=${apiUrl}, token=${autoToken ? '(已设置)' : '(未设置)'}`);
 
     let prNumber = '';
     const eventPath = process.env.ATOMGIT_EVENT_PATH || '';
@@ -306,24 +276,18 @@ function buildAutoArgs() {
       try {
         const eventData = JSON.parse(fs.readFileSync(eventPath, { encoding: 'utf-8' }));
         prNumber = eventData.pull_request?.number || eventData.number || '';
-        console.log(`[INFO] 从 event.json 获取 PR number: ${prNumber || '(未找到)'}`);
-      } catch (e) {
-        console.log('[WARN] 解析 event.json 失败');
-      }
-    } else {
-      console.log(`[INFO] event.json 不存在，尝试通过 API 查找 PR`);
+      } catch (e) { }
     }
 
     if (!prNumber && autoToken && repo) {
       const headRef = process.env.ATOMGIT_HEAD_REF || execCapture('git rev-parse --abbrev-ref HEAD') || '';
-      console.log(`[INFO] 源分支: ${headRef}`);
       if (headRef) {
         prNumber = findPrNumberByBranch(apiUrl, repo, headRef, baseRef, autoToken);
       }
     }
 
-    if (autoToken && repo && prNumber) {
-      console.log(`[INFO] 通过 API 获取 PR #${prNumber} 变更文件列表`);
+    if (prNumber) {
+      console.log(`[INFO] 获取 PR #${prNumber} 变更文件列表`);
       const files = fetchPrFiles(apiUrl, repo, prNumber, autoToken);
       if (files.length > 0) {
         console.log(`[INFO] PR 增量文件 (${files.length} 个):`);
