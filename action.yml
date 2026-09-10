@@ -17,6 +17,9 @@ inputs:
       validation:
         required_message: ""
 
+permissions:
+  pr: read
+
 outputs:
   result:
     description: "pre-commit 运行结果：success 或 failed"
