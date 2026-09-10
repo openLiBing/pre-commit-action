@@ -203,13 +203,21 @@ function detectMirrorConfig() {
 function fetchPrFiles(apiUrl, repo, prNumber, token) {
   const url = `${apiUrl}/api/v5/repos/${repo}/pulls/${prNumber}/files.json?access_token=${encodeURIComponent(token)}&per_page=100`;
   console.log(`[INFO] API URL: ${url.replace(token, '***')}`);
-  const output = execCapture(`curl -sf "${url}"`);
+  const output = execCapture(`curl -s -w "\\nHTTP_CODE:%{http_code}" "${url}"`);
   if (!output) {
-    console.log('[WARN] API 请求变更文件列表失败');
+    console.log('[WARN] API 请求变更文件列表失败: curl 无输出');
+    return [];
+  }
+  const httpCodeMatch = output.match(/HTTP_CODE:(\d+)/);
+  const httpCode = httpCodeMatch ? httpCodeMatch[1] : '未知';
+  const body = output.replace(/\nHTTP_CODE:\d+$/, '');
+  console.log(`[INFO] API HTTP 状态码: ${httpCode}`);
+  if (httpCode !== '200') {
+    console.log(`[WARN] API 请求失败: HTTP ${httpCode}, 响应: ${body.substring(0, 500)}`);
     return [];
   }
   try {
-    const data = JSON.parse(output);
+    const data = JSON.parse(body);
     return data.map(f => f.filename);
   } catch (e) {
     console.log(`[WARN] 解析 PR 文件列表失败: ${e.message}`);
@@ -220,13 +228,22 @@ function fetchPrFiles(apiUrl, repo, prNumber, token) {
 function findPrNumberByBranch(apiUrl, repo, headBranch, baseBranch, token) {
   const url = `${apiUrl}/api/v5/repos/${repo}/pulls?access_token=${encodeURIComponent(token)}&state=open&per_page=100`;
   console.log(`[INFO] 通过 API 查找 PR: head=${headBranch}, base=${baseBranch}`);
-  const output = execCapture(`curl -sf "${url}"`);
+  console.log(`[INFO] PR 列表 API URL: ${url.replace(token, '***')}`);
+  const output = execCapture(`curl -s -w "\\nHTTP_CODE:%{http_code}" "${url}"`);
   if (!output) {
-    console.log('[WARN] API 请求 PR 列表失败');
+    console.log('[WARN] API 请求 PR 列表失败: curl 无输出');
+    return '';
+  }
+  const httpCodeMatch = output.match(/HTTP_CODE:(\d+)/);
+  const httpCode = httpCodeMatch ? httpCodeMatch[1] : '未知';
+  const body = output.replace(/\nHTTP_CODE:\d+$/, '');
+  console.log(`[INFO] PR 列表 HTTP 状态码: ${httpCode}`);
+  if (httpCode !== '200') {
+    console.log(`[WARN] API 请求 PR 列表失败: HTTP ${httpCode}, 响应: ${body.substring(0, 500)}`);
     return '';
   }
   try {
-    const prs = JSON.parse(output);
+    const prs = JSON.parse(body);
     const matched = prs.find(pr => {
       const head = (pr.head?.ref || '').replace(/^refs\/heads\//, '');
       const base = (pr.base?.ref || '').replace(/^refs\/heads\//, '');
