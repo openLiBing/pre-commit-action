@@ -17,14 +17,6 @@ module.exports = require("fs");
 
 /***/ }),
 
-/***/ 692:
-/***/ ((module) => {
-
-"use strict";
-module.exports = require("https");
-
-/***/ }),
-
 /***/ 857:
 /***/ ((module) => {
 
@@ -84,7 +76,6 @@ const { execSync, execFileSync } = __nccwpck_require__(317);
 const fs = __nccwpck_require__(896);
 const path = __nccwpck_require__(928);
 const os = __nccwpck_require__(857);
-const https = __nccwpck_require__(692);
 
 const PIP_MIRROR_DEFAULT = 'https://mirrors.huaweicloud.com/repository/pypi/simple';
 const GO_PROXY_DEFAULT = 'https://mirrors.huaweicloud.com/repository/goproxy/';
@@ -211,24 +202,18 @@ function detectMirrorConfig() {
 
 function fetchPrFiles(apiUrl, repo, prNumber, token) {
   const url = `${apiUrl}/api/v5/repos/${repo}/pulls/${prNumber}/files.json?access_token=${encodeURIComponent(token)}&per_page=100`;
-  return new Promise((resolve, reject) => {
-    https.get(url, { headers: { 'Content-Type': 'application/json' } }, (res) => {
-      let data = '';
-      res.on('data', (chunk) => { data += chunk; });
-      res.on('end', () => {
-        if (res.statusCode >= 200 && res.statusCode < 300) {
-          try {
-            const files = JSON.parse(data);
-            resolve(files.map(f => f.filename));
-          } catch (e) {
-            reject(new Error(`解析 PR 文件列表失败: ${e.message}`));
-          }
-        } else {
-          reject(new Error(`API 请求失败: HTTP ${res.statusCode}`));
-        }
-      });
-    }).on('error', (e) => { reject(e); });
-  });
+  const output = execCapture(`curl -sf "${url}"`);
+  if (!output) {
+    console.log('[WARN] API 请求变更文件列表失败');
+    return [];
+  }
+  try {
+    const data = JSON.parse(output);
+    return data.map(f => f.filename);
+  } catch (e) {
+    console.log(`[WARN] 解析 PR 文件列表失败: ${e.message}`);
+    return [];
+  }
 }
 
 function buildAutoArgs() {
@@ -242,6 +227,7 @@ function buildAutoArgs() {
     const autoToken = process.env.ATOMGIT_TOKEN || '';
     const apiUrl = process.env.ATOMGIT_API_URL || 'https://api.gitcode.com';
     const repo = process.env.ATOMGIT_REPOSITORY || '';
+    console.log(`[INFO] API 配置: repo=${repo || '(空)'}, apiUrl=${apiUrl}, token=${autoToken ? '(已设置)' : '(未设置)'}`);
 
     let prNumber = '';
     const eventPath = process.env.ATOMGIT_EVENT_PATH || '';
@@ -249,23 +235,23 @@ function buildAutoArgs() {
       try {
         const eventData = JSON.parse(fs.readFileSync(eventPath, { encoding: 'utf-8' }));
         prNumber = eventData.pull_request?.number || eventData.number || '';
+        console.log(`[INFO] 从 event.json 获取 PR number: ${prNumber || '(未找到)'}`);
       } catch (e) {
         console.log('[WARN] 解析 event.json 失败，跳过 API 获取变更文件列表');
       }
+    } else {
+      console.log(`[INFO] event.json 路径: ${eventPath || '(未设置)'}, 文件存在: ${eventPath && fs.existsSync(eventPath)}`);
     }
 
     if (autoToken && repo && prNumber) {
       console.log(`[INFO] 通过 API 获取 PR #${prNumber} 变更文件列表`);
-      fetchPrFiles(apiUrl, repo, prNumber, autoToken).then((files) => {
-        if (files.length === 0) {
-          console.log('[INFO] PR 无变更文件，跳过增量检查');
-          return { type: 'skip' };
-        }
+      const files = fetchPrFiles(apiUrl, repo, prNumber, autoToken);
+      if (files.length > 0) {
         console.log(`[INFO] PR 增量文件 (${files.length} 个):`);
         files.forEach(f => console.log(`  - ${f}`));
-      }).catch((e) => {
-        console.log(`[WARN] API 获取变更文件列表失败: ${e.message}`);
-      });
+      } else {
+        console.log('[INFO] API 未获取到变更文件列表');
+      }
     }
 
     console.log(`[INFO] 拉取目标分支 origin/${baseRef} 以获取增量文件`);
