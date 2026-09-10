@@ -1,8 +1,18 @@
-# pre-commit-action
-
 ## 简介
 
 安装 pre-commit 并对代码仓库执行钩子检查。支持 PR 增量检查和全量检查自动切换。
+
+## 工作模式
+
+| 触发事件                   | 检查方式                              | 说明               |
+| -------------------------- | ------------------------------------- | ------------------ |
+| PR（mr/pull_request/note） | `--from-ref FETCH_HEAD --to-ref HEAD` | 仅检查 PR 变更文件 |
+| 其他事件                   | `--all-files`                         | 全量检查所有文件   |
+
+PR 增量检查流程：
+
+1. `git fetch origin baseRef` 拉取目标分支
+2. 执行 `pre-commit run --from-ref FETCH_HEAD --to-ref HEAD`
 
 ## 输入参数
 
@@ -41,7 +51,6 @@ jobs:
         uses: openlibing/pre-commit-action@v1.0.0
         with:
           extra_args: ${{ inputs.extra_args }}
-          gc_token: ${{ inputs.GC_TOKEN }}
 ```
 
 > **关于 `runs-on`**：`'self-hosted'` 为固定必填项，表示使用自定义执行机；后续标签（如 `'os=ubuntu'`、`'arch=x64'`）需与执行机注册时设置的标签一致，流水线将根据标签精确调度到对应的执行机。
@@ -127,17 +136,6 @@ repos:
 ```
 
 > **判断依据**：hooks 的 `repo` 地址以 `https://gitcode.com/` 开头的是 GitCode 镜像仓，云端执行机可直接访问；以 `https://github.com/` 或其他外部地址开头的，需要使用自定义执行机。
-
-## GC_TOKEN 配置
-
-`GC_TOKEN` 用于访问私有仓库（私仓）时进行身份认证，区分私仓的访问权限。
-
-### 配置方式
-
-需要在组织中配置 Actions 密钥 `GC_TOKEN`，配置步骤：
-
-1. 进入组织（或仓库）的 **Settings → Secrets → Actions**
-2. 新建密钥，名称为 `GC_TOKEN`，值为具有代码访问权限的访问令牌
 
 ## 注意事项
 

@@ -37,7 +37,7 @@ module.exports = require("path");
 /************************************************************************/
 /******/ 	// The module cache
 /******/ 	var __webpack_module_cache__ = {};
-/******/
+/******/ 	
 /******/ 	// The require function
 /******/ 	function __nccwpck_require__(moduleId) {
 /******/ 		// Check if module is in cache
@@ -51,7 +51,7 @@ module.exports = require("path");
 /******/ 			// no module.loaded needed
 /******/ 			exports: {}
 /******/ 		};
-/******/
+/******/ 	
 /******/ 		// Execute the module function
 /******/ 		var threw = true;
 /******/ 		try {
@@ -60,16 +60,16 @@ module.exports = require("path");
 /******/ 		} finally {
 /******/ 			if(threw) delete __webpack_module_cache__[moduleId];
 /******/ 		}
-/******/
+/******/ 	
 /******/ 		// Return the exports of the module
 /******/ 		return module.exports;
 /******/ 	}
-/******/
+/******/ 	
 /************************************************************************/
 /******/ 	/* webpack/runtime/compat */
-/******/
+/******/ 	
 /******/ 	if (typeof __nccwpck_require__ !== 'undefined') __nccwpck_require__.ab = __dirname + "/";
-/******/
+/******/ 	
 /************************************************************************/
 var __webpack_exports__ = {};
 const { execSync, execFileSync } = __nccwpck_require__(317);
@@ -91,9 +91,19 @@ function getInput(name) {
   const trimmed = val.trim();
 
   if (name === 'extra_args' && trimmed) {
-    const allowedArgs = ['--all', '--all-files', '--help', '--show-diff-on-failure'];
+    const allowedArgs = ['--all', '--all-files', '--help', '--show-diff-on-failure', '--from-ref', '--to-ref', '--files'];
+    const argsWithValue = ['--from-ref', '--to-ref', '--files'];
     const args = trimmed.split(' ');
+    let skipNext = false;
     for (const arg of args) {
+      if (skipNext) {
+        skipNext = false;
+        continue;
+      }
+      if (argsWithValue.includes(arg)) {
+        skipNext = true;
+        continue;
+      }
       if (!allowedArgs.includes(arg) && !arg.startsWith('--')) {
         console.log(`[ERROR] Invalid extra_args: ${arg}. Only -- arguments are allowed.`);
         process.exit(1);
@@ -198,28 +208,11 @@ function buildAutoArgs() {
   if ((eventName === 'mr' || eventName === 'pull_request' || eventName === 'note') && baseRef) {
     console.log(`[INFO] 检测到 PR 事件，目标分支: ${baseRef}`);
 
-    const token = getInput('gc_token');
-    if (token) {
-      const remoteUrl = execCapture('git remote get-url origin');
-      if (remoteUrl && remoteUrl.startsWith('https://')) {
-        const encodedToken = encodeURIComponent(token);
-        const authUrl = remoteUrl.replace('https://', `https://oauth2:${encodedToken}@`);
-        execCapture(`git remote set-url origin "${authUrl}"`);
-      }
-    }
-
     console.log(`[INFO] 拉取目标分支 origin/${baseRef} 以获取增量文件`);
     execFile('git', ['fetch', 'origin', baseRef]);
 
-    const diffFilesOutput = execFileSync('git', ['diff', 'FETCH_HEAD', '--name-only', '--diff-filter=ACMR'], { encoding: 'utf-8' });
-    const files = diffFilesOutput.split('\n').filter(f => f.trim());
-    if (files.length === 0) {
-      console.log('[INFO] PR 无变更文件，跳过增量检查');
-      return { type: 'skip' };
-    }
-    console.log(`[INFO] PR 增量文件 (${files.length} 个):`);
-    files.forEach(f => console.log(`  - ${f}`));
-    return { type: 'file', files: files };
+    console.log(`[INFO] 使用 --from-ref FETCH_HEAD --to-ref HEAD 增量检查`);
+    return { type: 'args', args: `--from-ref FETCH_HEAD --to-ref HEAD` };
   }
 
   console.log('[INFO] 非 PR 事件，使用 --all-files 检查全量文件');
@@ -234,18 +227,10 @@ function runPreCommit(cmdResult) {
     return;
   }
 
-  if (cmdResult.type === 'file') {
-    try {
-      execFile('python', ['-m', 'pre_commit', 'run', '--files', ...cmdResult.files]);
-    } catch (e) {
-      checkFailed = true;
-    }
-  } else {
-    try {
-      execFile('python', ['-m', 'pre_commit', 'run', ...cmdResult.args.split(' ')]);
-    } catch (e) {
-      checkFailed = true;
-    }
+  try {
+    execFile('python', ['-m', 'pre_commit', 'run', ...cmdResult.args.split(' ')]);
+  } catch (e) {
+    checkFailed = true;
   }
 
   if (checkFailed) {
@@ -254,23 +239,19 @@ function runPreCommit(cmdResult) {
     console.log('1. 安装/初始化环境');
     console.log('   pip install pre-commit && pre-commit install --install-hooks');
     console.log('2. 检查并修复变更文件');
-    if (cmdResult.type === 'file') {
-      console.log(`   pre-commit run --files ${cmdResult.files.join(' ')}`);
-    } else {
-      console.log('   pre-commit run --all-files');
-    }
-    console.log('\n如需了解更多告警屏蔽、pre-commit配置等信息，请查阅: https://gitcode.com/openlibing/docs/blob/main/static-code-analysis/solutions/pre-commit-solution.md');
+    console.log('   pre-commit run --all-files');
+    console.log('\n如需了解更多告警屏蔽、pre-commit配置等信息，请查阅: https://gitcode.com/openlibing/docs/blob/main/static-code-analysis/solutions/pre-commit/README.md');
     process.exit(1);
   }
   console.log('[OK] pre-commit 检查通过');
-  console.log('如需了解更多告警屏蔽、pre-commit配置等信息，请查阅: https://gitcode.com/openlibing/docs/blob/main/static-code-analysis/solutions/pre-commit-solution.md');
+  console.log('如需了解更多告警屏蔽、pre-commit配置等信息，请查阅: https://gitcode.com/openlibing/docs/blob/main/static-code-analysis/solutions/pre-commit/README.md');
 }
 
 async function run() {
   const extraArgs = getInput('extra_args');
   console.log('===== pre-commit-action 启动 =====');
 
-  console.log('\n===== [1] 检查 Python 环境 =====');
+console.log('\n===== [1] 检查 Python 环境 =====');
   execFile('python', ['--version']);
 
   console.log('\n===== [2] 安装 pre-commit =====');
@@ -286,7 +267,22 @@ async function run() {
   } else {
     console.log('[WARN] Go 未安装，跳过 Go 代理配置');
   }
-  execFile('python', ['-m', 'pip', 'install', '--upgrade', 'pip', '--timeout', PIP_TIMEOUT]);
+  const MIN_PIP_VERSION = '21.0';
+  const pipVersionOutput = execCapture('python -m pip --version');
+  const pipVersionMatch = pipVersionOutput.match(/pip\s+(\d+\.\d+)/);
+  if (pipVersionMatch) {
+    const currentVersion = parseFloat(pipVersionMatch[1]);
+    const minVersion = parseFloat(MIN_PIP_VERSION);
+    if (currentVersion >= minVersion) {
+      console.log(`[OK] pip ${pipVersionMatch[1]} 已安装且 >= ${MIN_PIP_VERSION}，跳过升级`);
+    } else {
+      console.log(`[INFO] pip ${pipVersionMatch[1]} < ${MIN_PIP_VERSION}，使用 --ignore-installed 升级（避免卸载系统 pip 失败）`);
+      execFile('python', ['-m', 'pip', 'install', '--ignore-installed', '--upgrade', 'pip', '--timeout', PIP_TIMEOUT]);
+    }
+  } else {
+    console.log('[INFO] pip 未安装，开始安装 pip');
+    execFile('python', ['-m', 'pip', 'install', '--upgrade', 'pip', '--timeout', PIP_TIMEOUT]);
+  }
   execFile('python', ['-m', 'pip', 'install', 'pre-commit', '--timeout', PIP_TIMEOUT]);
   execFile('python', ['-m', 'pre_commit', '--version']);
 
