@@ -1,5 +1,5 @@
 name: "pre-commit-action"
-version: 1.0.29
+version: 1.0.30
 author: "test-devops"
 description: "安装 pre-commit 并对代码仓库执行钩子检查"
 
@@ -29,7 +29,7 @@ inputs:
       validation:
         required_message: ""
   report-dir:
-    description: "各工具扫描报告约定目录（机器临时目录，非代码仓目录）。插件读取该目录下 gitleaks JSON 报告，转 SARIF 上传 OBS 并回调 openlibing 后端。PR 类型触发不进行报告上传回调"
+    description: "SARIF 报告约定目录（机器临时目录，非代码仓目录）。SARIF 转换由业务仓负责（detect-secrets/gitleaks JSON 在业务仓 workflow 中转成 *.sarif 写入该目录），插件读取该目录下 *.sarif 上传 OBS 并回调 openlibing 后端。PR 类型触发不进行报告上传回调"
     required: false
     default: "/tmp/pre-commit-reports/"
     layout:

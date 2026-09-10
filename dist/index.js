@@ -47478,220 +47478,6 @@ exports.z = function (fn) {
 
 /***/ }),
 
-/***/ 1564:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
-
-"use strict";
-
-
-const crypto = __nccwpck_require__(6982);
-
-/**
- * pre-commit 扫描报告 → SARIF 2.1.0 转换器。
- *
- * 纯函数模块（无 IO），便于单元测试与独立复用。
- * 支持两种工具的 JSON 报告：
- *   - gitleaks（--report-format json 产出的 findings 数组）：
- *     [{ RuleID, Description, StartLine, EndLine, StartColumn, EndColumn,
- *        Match, Secret, File, Commit, Entropy, Author, Email, Date, Message, Tags }]
- *   - detect-secrets（scan 输出的对象）：
- *     { generated_at, plugins_used: [{name,...}], version,
- *       results: { <file>: [{type, filename, hashed_secret, is_verified, line_number}] } }
- * 输出为符合 SARIF 2.1.0 规范的扫描结果对象。
- */
-
-/**
- * 生成稳定位置 hash（sha256 hex），用于 SARIF result 的
- * partialFingerprints.primaryLocationLineHash。后端 StandardSarifParser
- * 从该字段取 locationHashRaw 参与 fingerprintKey 计算，缺失会导致 issue 被跳过。
- * @param {Array} parts 唯一标识该位置的字段（file/line/type/指纹值等）
- */
-function _locationHash(parts) {
-  const raw = parts.map((p) => (p === undefined || p === null ? '' : String(p))).join('|');
-  return crypto.createHash('sha256').update(raw, 'utf8').digest('hex');
-}
-
-/** 构造单个 rule 对象（同一 RuleID 去重）。 */
-function _buildRules(findings) {
-  const rules = [];
-  const seen = new Set();
-  for (const f of findings) {
-    if (!f.RuleID || seen.has(f.RuleID)) {
-      continue;
-    }
-    seen.add(f.RuleID);
-    rules.push({
-      id: f.RuleID,
-      name: f.RuleID,
-      shortDescription: { text: f.Description || `gitleaks rule: ${f.RuleID}` },
-      fullDescription: { text: f.Description || `gitleaks rule: ${f.RuleID}` },
-      properties: { tags: f.Tags || [] }
-    });
-  }
-  return rules;
-}
-
-/** 构造单个 result 对象（冗余字段放入 properties 保留原始信息）。 */
-function _buildResult(f) {
-  const result = {
-    ruleId: f.RuleID,
-    level: 'error',
-    message: { text: f.Description || `检测到敏感信息泄露：${f.RuleID}` },
-    partialFingerprints: {
-      primaryLocationLineHash: _locationHash([f.File, f.StartLine, f.StartColumn, f.Commit, f.RuleID])
-    },
-    locations: [
-      {
-        physicalLocation: {
-          artifactLocation: { uri: f.File || 'unknown' },
-          region: {
-            startLine: f.StartLine || 1,
-            startColumn: f.StartColumn || 1,
-            endLine: f.EndLine || f.StartLine || 1,
-            endColumn: f.EndColumn || f.StartColumn || 1
-          }
-        }
-      }
-    ]
-  };
-
-  const props = {};
-  if (f.Secret) props.secret = f.Secret;
-  if (f.Match) props.match = f.Match;
-  if (f.Commit) props.commit = f.Commit;
-  if (f.Author) props.author = f.Author;
-  if (f.Email) props.email = f.Email;
-  if (f.Date) props.date = f.Date;
-  if (f.Message) props.message = f.Message;
-  if (f.Entropy !== undefined && f.Entropy !== null) props.entropy = f.Entropy;
-  if (f.Tags && f.Tags.length > 0) props.tags = f.Tags;
-  if (Object.keys(props).length > 0) {
-    result.properties = props;
-  }
-  return result;
-}
-
-/**
- * 将 gitleaks findings 数组转换为 SARIF 2.1.0 对象。
- * @param {Array} findings gitleaks JSON 报告内容（findings 数组）
- * @param {Object} [opts]
- * @param {string} [opts.toolVersion] gitleaks 版本号，写入 tool.driver.version
- * @returns {Object} SARIF 2.1.0 对象
- * @throws {Error} findings 不是数组时抛出
- */
-function convertGitleaksToSarif(findings, opts = {}) {
-  if (!Array.isArray(findings)) {
-    throw new Error('gitleaks 报告格式不正确：应为 JSON 数组（findings）');
-  }
-
-  return {
-    $schema: 'https://json.schemastore.org/sarif-2.1.0.json',
-    version: '2.1.0',
-    runs: [
-      {
-        tool: {
-          driver: {
-            name: 'gitleaks',
-            version: opts.toolVersion || '',
-            informationUri: 'https://github.com/gitleaks/gitleaks',
-            rules: _buildRules(findings)
-          }
-        },
-        results: findings.filter(f => f && f.RuleID).map(_buildResult)
-      }
-    ]
-  };
-}
-
-/**
- * 将 detect-secrets JSON 报告转换为 SARIF 2.1.0 对象。
- * @param {Object} report detect-secrets scan 输出（含 results 对象）
- * @param {Object} [opts]
- * @param {string} [opts.toolVersion] 覆盖 tool.driver.version
- * @returns {Object} SARIF 2.1.0 对象
- * @throws {Error} 报告缺少 results 对象时抛出
- */
-function convertDetectSecretsToSarif(report, opts = {}) {
-  if (!report || typeof report !== 'object' || !report.results || typeof report.results !== 'object') {
-    throw new Error('detect-secrets 报告格式不正确：应为包含 results 对象的 JSON');
-  }
-
-  // 收集全部 secret 与去重后的检测类型（ruleId 使用检测类型，与 rules 一一对应）
-  const typeSet = new Set();
-  const secretList = [];
-  for (const [file, secrets] of Object.entries(report.results)) {
-    for (const s of Array.isArray(secrets) ? secrets : []) {
-      if (!s || typeof s !== 'object') {
-        continue;
-      }
-      if (s.type) {
-        typeSet.add(s.type);
-      }
-      secretList.push({ file, secret: s });
-    }
-  }
-
-  const rules = [...typeSet].map((t) => ({
-    id: t,
-    name: t,
-    shortDescription: { text: `detect-secrets: ${t}` },
-    fullDescription: { text: `detect-secrets 检测类型：${t}` }
-  }));
-
-  const results = secretList.map(({ file, secret: s }) => {
-    const type = s.type || 'Secret';
-    const line = s.line_number || 1;
-    const result = {
-      ruleId: type,
-      level: s.is_verified ? 'error' : 'warning',
-      message: { text: `在 ${file} 第 ${line} 行检测到 ${type}` },
-      partialFingerprints: {
-        primaryLocationLineHash: _locationHash([file, line, type, s.hashed_secret])
-      },
-      locations: [
-        {
-          physicalLocation: {
-            artifactLocation: { uri: file },
-            region: { startLine: line }
-          }
-        }
-      ]
-    };
-
-    const props = {};
-    if (s.hashed_secret) props.hashedSecret = s.hashed_secret;
-    if (typeof s.is_verified === 'boolean') props.isVerified = s.is_verified;
-    if (s.filename) props.filename = s.filename;
-    if (Object.keys(props).length > 0) {
-      result.properties = props;
-    }
-    return result;
-  });
-
-  return {
-    $schema: 'https://json.schemastore.org/sarif-2.1.0.json',
-    version: '2.1.0',
-    runs: [
-      {
-        tool: {
-          driver: {
-            name: 'detect-secrets',
-            version: opts.toolVersion || report.version || '',
-            informationUri: 'https://github.com/Yelp/detect-secrets',
-            rules
-          }
-        },
-        results
-      }
-    ]
-  };
-}
-
-module.exports = { convertGitleaksToSarif, convertDetectSecretsToSarif };
-
-
-/***/ }),
-
 /***/ 75:
 /***/ ((module) => {
 
@@ -49786,10 +49572,8 @@ var __webpack_exports__ = {};
 const { execSync, execFileSync } = __nccwpck_require__(5317);
 const fs = __nccwpck_require__(9896);
 const path = __nccwpck_require__(6928);
-const os = __nccwpck_require__(857);
 const ObsClient = __nccwpck_require__(1728);
 const { callApig, configure, getCredentials } = __nccwpck_require__(8620);
-const { convertGitleaksToSarif, convertDetectSecretsToSarif } = __nccwpck_require__(1564);
 
 const PIP_MIRROR_DEFAULT = 'https://mirrors.huaweicloud.com/repository/pypi/simple';
 const GO_PROXY_DEFAULT = 'https://mirrors.huaweicloud.com/repository/goproxy/';
@@ -50014,22 +49798,10 @@ function resolveBranch() {
     : (process.env.ATOMGIT_REF_NAME || '');
 }
 
-/** 将扫描 JSON 报告转为 SARIF 文件（写入 os.tmpdir），返回 { name, sarifPath }。按文件名前缀分发转换器。 */
-function buildSarifFile(jsonPath) {
-  const basename = path.basename(jsonPath);
-  const raw = JSON.parse(fs.readFileSync(jsonPath, 'utf-8'));
-  const sarif = basename.startsWith('detect-secrets')
-    ? convertDetectSecretsToSarif(raw)
-    : convertGitleaksToSarif(raw);
-  const name = basename.replace(/\.json$/, '') + '.sarif';
-  const sarifPath = path.join(os.tmpdir(), name);
-  fs.writeFileSync(sarifPath, JSON.stringify(sarif, null, 2), 'utf-8');
-  return { name, sarifPath };
-}
-
-/** 扫描报告上传：报告 → SARIF → OBS → APIG 回调。仅处理 gitleaks/detect-secrets JSON 报告，PR 类型触发跳过。 */
+/** 扫描报告上传：SARIF 报告 → OBS → APIG 回调。SARIF 转换由业务仓负责（detect-secrets/gitleaks
+ * JSON 在业务仓 workflow 中转换为 SARIF 后写入约定目录），插件只上传转换后的 *.sarif 文件。PR 类型触发跳过。 */
 async function uploadScanReports() {
-  console.log('\n===== [7] 报告扫描上传（报告 → SARIF → OBS → APIG 回调） =====');
+  console.log('\n===== [7] 报告扫描上传（SARIF 报告 → OBS → APIG 回调） =====');
 
   if (isPrEvent()) {
     console.log('[INFO] PR 类型触发，按约定不进行报告扫描上传回调，跳过');
@@ -50042,15 +49814,15 @@ async function uploadScanReports() {
     return;
   }
 
-  const reportFiles = fs.readdirSync(reportDir)
-    .filter(f => f.endsWith('.json') && (f.startsWith('gitleaks') || f.startsWith('detect-secrets')))
+  const sarifFiles = fs.readdirSync(reportDir)
+    .filter(f => f.endsWith('.sarif'))
     .sort();
-  if (reportFiles.length === 0) {
-    console.log(`[INFO] 报告目录中无 gitleaks/detect-secrets JSON 报告，跳过报告上传: ${reportDir}`);
+  if (sarifFiles.length === 0) {
+    console.log(`[INFO] 报告目录中无 SARIF 报告（业务仓需先将 JSON 转为 *.sarif 写入该目录），跳过报告上传: ${reportDir}`);
     return;
   }
-  console.log(`[OK] 发现 ${reportFiles.length} 个扫描报告:`);
-  reportFiles.forEach(f => console.log(`  - ${f}`));
+  console.log(`[OK] 发现 ${sarifFiles.length} 个 SARIF 报告:`);
+  sarifFiles.forEach(f => console.log(`  - ${f}`));
 
   const workflowRunId = process.env.ATOMGIT_RUN_ID || process.env.PIPELINE_RUN_ID || '';
   const repoName = process.env.ATOMGIT_REPOSITORY || '';
@@ -50059,8 +49831,6 @@ async function uploadScanReports() {
 
   const debugEnabled = getInput('debug') === 'true';
   const { region } = configure({ debug: debugEnabled });
-
-  const sarifFiles = reportFiles.map(f => buildSarifFile(path.join(reportDir, f)));
 
   console.log(`\n===== [8] OIDC 换证并上传 OBS（${OBS_BUCKET}/${objectKeyPrefix}/） =====`);
   const cred = await getCredentials();
@@ -50079,10 +49849,10 @@ async function uploadScanReports() {
   const sarifUrls = [];
   try {
     for (const sf of sarifFiles) {
-      const objectKey = `${objectKeyPrefix}/${sf.name}`;
+      const objectKey = `${objectKeyPrefix}/${sf}`;
       console.log(`[INFO] 上传 ${objectKey}`);
       // ACL: 'public-read'：后端 SarifParseServiceImpl 通过匿名 HTTP GET 下载，对象必须公共读
-      const result = await client.putObject({ Bucket: OBS_BUCKET, Key: objectKey, SourceFile: sf.sarifPath, ACL: 'public-read' });
+      const result = await client.putObject({ Bucket: OBS_BUCKET, Key: objectKey, SourceFile: path.join(reportDir, sf), ACL: 'public-read' });
       const msg = (result && result.CommonMsg) || {};
       if (!(msg.Status >= 200 && msg.Status < 300)) {
         throw new Error(`OBS upload failed (${msg.Status})${msg.Code ? ' [' + msg.Code + ']' : ''}: ${msg.Message || '未知错误'}`);

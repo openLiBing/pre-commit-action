@@ -1,10 +1,8 @@
 const { execSync, execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
 const ObsClient = require('esdk-obs-nodejs');
 const { callApig, configure, getCredentials } = require('@openlibing/huaweicloud-oidc-client');
-const { convertGitleaksToSarif, convertDetectSecretsToSarif } = require('./sarif-converter');
 
 const PIP_MIRROR_DEFAULT = 'https://mirrors.huaweicloud.com/repository/pypi/simple';
 const GO_PROXY_DEFAULT = 'https://mirrors.huaweicloud.com/repository/goproxy/';
@@ -229,22 +227,10 @@ function resolveBranch() {
     : (process.env.ATOMGIT_REF_NAME || '');
 }
 
-/** 将扫描 JSON 报告转为 SARIF 文件（写入 os.tmpdir），返回 { name, sarifPath }。按文件名前缀分发转换器。 */
-function buildSarifFile(jsonPath) {
-  const basename = path.basename(jsonPath);
-  const raw = JSON.parse(fs.readFileSync(jsonPath, 'utf-8'));
-  const sarif = basename.startsWith('detect-secrets')
-    ? convertDetectSecretsToSarif(raw)
-    : convertGitleaksToSarif(raw);
-  const name = basename.replace(/\.json$/, '') + '.sarif';
-  const sarifPath = path.join(os.tmpdir(), name);
-  fs.writeFileSync(sarifPath, JSON.stringify(sarif, null, 2), 'utf-8');
-  return { name, sarifPath };
-}
-
-/** 扫描报告上传：报告 → SARIF → OBS → APIG 回调。仅处理 gitleaks/detect-secrets JSON 报告，PR 类型触发跳过。 */
+/** 扫描报告上传：SARIF 报告 → OBS → APIG 回调。SARIF 转换由业务仓负责（detect-secrets/gitleaks
+ * JSON 在业务仓 workflow 中转换为 SARIF 后写入约定目录），插件只上传转换后的 *.sarif 文件。PR 类型触发跳过。 */
 async function uploadScanReports() {
-  console.log('\n===== [7] 报告扫描上传（报告 → SARIF → OBS → APIG 回调） =====');
+  console.log('\n===== [7] 报告扫描上传（SARIF 报告 → OBS → APIG 回调） =====');
 
   if (isPrEvent()) {
     console.log('[INFO] PR 类型触发，按约定不进行报告扫描上传回调，跳过');
@@ -257,15 +243,15 @@ async function uploadScanReports() {
     return;
   }
 
-  const reportFiles = fs.readdirSync(reportDir)
-    .filter(f => f.endsWith('.json') && (f.startsWith('gitleaks') || f.startsWith('detect-secrets')))
+  const sarifFiles = fs.readdirSync(reportDir)
+    .filter(f => f.endsWith('.sarif'))
     .sort();
-  if (reportFiles.length === 0) {
-    console.log(`[INFO] 报告目录中无 gitleaks/detect-secrets JSON 报告，跳过报告上传: ${reportDir}`);
+  if (sarifFiles.length === 0) {
+    console.log(`[INFO] 报告目录中无 SARIF 报告（业务仓需先将 JSON 转为 *.sarif 写入该目录），跳过报告上传: ${reportDir}`);
     return;
   }
-  console.log(`[OK] 发现 ${reportFiles.length} 个扫描报告:`);
-  reportFiles.forEach(f => console.log(`  - ${f}`));
+  console.log(`[OK] 发现 ${sarifFiles.length} 个 SARIF 报告:`);
+  sarifFiles.forEach(f => console.log(`  - ${f}`));
 
   const workflowRunId = process.env.ATOMGIT_RUN_ID || process.env.PIPELINE_RUN_ID || '';
   const repoName = process.env.ATOMGIT_REPOSITORY || '';
@@ -274,8 +260,6 @@ async function uploadScanReports() {
 
   const debugEnabled = getInput('debug') === 'true';
   const { region } = configure({ debug: debugEnabled });
-
-  const sarifFiles = reportFiles.map(f => buildSarifFile(path.join(reportDir, f)));
 
   console.log(`\n===== [8] OIDC 换证并上传 OBS（${OBS_BUCKET}/${objectKeyPrefix}/） =====`);
   const cred = await getCredentials();
@@ -294,10 +278,10 @@ async function uploadScanReports() {
   const sarifUrls = [];
   try {
     for (const sf of sarifFiles) {
-      const objectKey = `${objectKeyPrefix}/${sf.name}`;
+      const objectKey = `${objectKeyPrefix}/${sf}`;
       console.log(`[INFO] 上传 ${objectKey}`);
       // ACL: 'public-read'：后端 SarifParseServiceImpl 通过匿名 HTTP GET 下载，对象必须公共读
-      const result = await client.putObject({ Bucket: OBS_BUCKET, Key: objectKey, SourceFile: sf.sarifPath, ACL: 'public-read' });
+      const result = await client.putObject({ Bucket: OBS_BUCKET, Key: objectKey, SourceFile: path.join(reportDir, sf), ACL: 'public-read' });
       const msg = (result && result.CommonMsg) || {};
       if (!(msg.Status >= 200 && msg.Status < 300)) {
         throw new Error(`OBS upload failed (${msg.Status})${msg.Code ? ' [' + msg.Code + ']' : ''}: ${msg.Message || '未知错误'}`);

@@ -2,18 +2,18 @@
 
 ## 简介
 
-安装 pre-commit 并对代码仓库执行钩子检查。支持 PR 增量检查和全量检查自动切换。非 PR 类型触发时，会读取约定报告目录下的扫描报告（gitleaks / detect-secrets JSON），转换为 SARIF 2.1.0 上传到 OBS，并回调 openlibing 后端。
+安装 pre-commit 并对代码仓库执行钩子检查。支持 PR 增量检查和全量检查自动切换。非 PR 类型触发时，会读取约定报告目录下的 SARIF 报告（SARIF 由业务仓从 gitleaks / detect-secrets JSON 转换生成），上传到 OBS，并回调 openlibing 后端。
 
 ## 输入参数
 
 | 参数       | 说明                                                                                           | 必填 | 默认值         |
 | ---------- | ---------------------------------------------------------------------------------------------- | ---- | -------------- |
 | extra_args | pre-commit 运行参数。为空时自动判断：PR 事件检查增量文件，非 PR 检查全量；填写时按指定参数执行 | 否   | 空（自动判断） |
-| report-dir | 各工具扫描报告约定目录（机器临时目录，非代码仓目录）。插件读取该目录下 gitleaks / detect-secrets JSON 报告，转 SARIF 上传 OBS 并回调 openlibing 后端。PR 类型触发不进行报告上传回调 | 否   | /tmp/pre-commit-reports/ |
+| report-dir | SARIF 报告约定目录（机器临时目录，非代码仓目录）。SARIF 转换由业务仓负责（detect-secrets/gitleaks JSON 在业务仓 workflow 中转成 `*.sarif` 写入该目录），插件读取该目录下 `*.sarif` 上传 OBS 并回调 openlibing 后端。PR 类型触发不进行报告上传回调 | 否   | /tmp/pre-commit-reports/ |
 | env-type   | 回调环境类型：prod（正式环境 apig.openlibing.com）或 beta（测试环境华为云 APIG 实例域名） | 否   | prod          |
 | debug      | 开启 SDK 调试定位日志（请求/响应详情，敏感字段自动脱敏）                                        | 否   | false          |
 
-> **报告上传约定**：需将扫描报告生成到约定目录——gitleaks 钩子配置 `--report-path /tmp/pre-commit-reports/gitleaks.json --report-format json`；detect-secrets 在 workflow 中执行 `detect-secrets scan > /tmp/pre-commit-reports/detect-secrets.json`。插件读取该目录下的 `gitleaks*.json` / `detect-secrets*.json` 转 SARIF 上传。PR 类型触发（mr / pull_request / note）不做报告扫描上传回调。
+> **报告上传约定**：SARIF 转换由业务仓负责——detect-secrets 钩子生成 `detect-secrets.json` 后，业务仓 workflow 调用自己的转换脚本（如 `scripts/convert-detect-secrets-to-sarif.py`）输出 `detect-secrets.sarif` 到约定目录 `/tmp/pre-commit-reports/`；gitleaks 同理生成 `gitleaks.sarif`。插件只读取该目录下的 `*.sarif` 上传 OBS 并回调。PR 类型触发（mr / pull_request / note）不做报告扫描上传回调。
 
 ## 输出参数
 
