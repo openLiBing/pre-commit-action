@@ -4,12 +4,13 @@
 
 ## 工作模式
 
-| 触发事件 | 检查方式 | 说明 |
-| -------- | -------- | ---- |
+| 触发事件                   | 检查方式                              | 说明                                                    |
+| -------------------------- | ------------------------------------- | ------------------------------------------------------- |
 | PR（mr/pull_request/note） | `--from-ref FETCH_HEAD --to-ref HEAD` | 仅检查 PR 变更文件，并通过 API 获取变更文件列表打印日志 |
-| 其他事件 | `--all-files` | 全量检查所有文件 |
+| 其他事件                   | `--all-files`                         | 全量检查所有文件                                        |
 
 PR 增量检查流程：
+
 1. 通过 GitCode API 获取 PR 变更文件列表（用于日志展示）
 2. `git fetch origin baseRef` 拉取目标分支
 3. 执行 `pre-commit run --from-ref FETCH_HEAD --to-ref HEAD`
@@ -37,7 +38,7 @@ PR 增量检查流程：
 
 ```yaml
 permissions:
-  pr: read  # PR 增量检查需要读取 PR 信息的权限
+  pr: read # PR 增量检查需要读取 PR 信息的权限
 
 jobs:
   pre-commit:
@@ -100,7 +101,7 @@ repos:
 
 ```yaml
 permissions:
-  pr: read  # PR 增量检查需要读取 PR 信息的权限
+  pr: read # PR 增量检查需要读取 PR 信息的权限
 
 jobs:
   pre-commit:
