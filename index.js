@@ -128,6 +128,7 @@ function detectMirrorConfig() {
 
 function fetchPrFiles(apiUrl, repo, prNumber, token) {
   const url = `${apiUrl}/api/v5/repos/${repo}/pulls/${prNumber}/files.json?access_token=${encodeURIComponent(token)}&per_page=100`;
+  console.log(`[INFO] API URL: ${url.replace(token, '***')}`);
   const output = execCapture(`curl -sf "${url}"`);
   if (!output) {
     console.log('[WARN] API 请求变更文件列表失败');
@@ -139,6 +140,33 @@ function fetchPrFiles(apiUrl, repo, prNumber, token) {
   } catch (e) {
     console.log(`[WARN] 解析 PR 文件列表失败: ${e.message}`);
     return [];
+  }
+}
+
+function findPrNumberByBranch(apiUrl, repo, headBranch, baseBranch, token) {
+  const url = `${apiUrl}/api/v5/repos/${repo}/pulls?access_token=${encodeURIComponent(token)}&state=open&per_page=100`;
+  console.log(`[INFO] 通过 API 查找 PR: head=${headBranch}, base=${baseBranch}`);
+  const output = execCapture(`curl -sf "${url}"`);
+  if (!output) {
+    console.log('[WARN] API 请求 PR 列表失败');
+    return '';
+  }
+  try {
+    const prs = JSON.parse(output);
+    const matched = prs.find(pr => {
+      const head = (pr.head?.ref || '').replace(/^refs\/heads\//, '');
+      const base = (pr.base?.ref || '').replace(/^refs\/heads\//, '');
+      return head === headBranch && base === baseBranch;
+    });
+    if (matched) {
+      console.log(`[INFO] 匹配到 PR #${matched.number}`);
+      return String(matched.number);
+    }
+    console.log('[WARN] 未找到匹配的 PR');
+    return '';
+  } catch (e) {
+    console.log(`[WARN] 解析 PR 列表失败: ${e.message}`);
+    return '';
   }
 }
 
@@ -163,10 +191,18 @@ function buildAutoArgs() {
         prNumber = eventData.pull_request?.number || eventData.number || '';
         console.log(`[INFO] 从 event.json 获取 PR number: ${prNumber || '(未找到)'}`);
       } catch (e) {
-        console.log('[WARN] 解析 event.json 失败，跳过 API 获取变更文件列表');
+        console.log('[WARN] 解析 event.json 失败');
       }
     } else {
-      console.log(`[INFO] event.json 路径: ${eventPath || '(未设置)'}, 文件存在: ${eventPath && fs.existsSync(eventPath)}`);
+      console.log(`[INFO] event.json 不存在，尝试通过 API 查找 PR`);
+    }
+
+    if (!prNumber && autoToken && repo) {
+      const headRef = process.env.ATOMGIT_HEAD_REF || execCapture('git rev-parse --abbrev-ref HEAD') || '';
+      console.log(`[INFO] 源分支: ${headRef}`);
+      if (headRef) {
+        prNumber = findPrNumberByBranch(apiUrl, repo, headRef, baseRef, autoToken);
+      }
     }
 
     if (autoToken && repo && prNumber) {
