@@ -50039,6 +50039,10 @@ async function uploadScanReports() {
     security_token: cred.securityToken,
     server
   });
+  // esdk-obs-nodejs 的 initFactory 为 fire-and-forget（内部 await refresh 后才设置签名上下文），
+  // 构造后立即 putObject 会读到 null signatureContext（Cannot read properties of null (reading 'signature')），
+  // 此处让出一个微任务等待初始化完成。
+  await Promise.resolve();
 
   const sarifUrls = [];
   try {
