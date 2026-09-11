@@ -354,6 +354,8 @@ function generateFallbackSarif(preCommitOutput) {
   const repoName = process.env.ATOMGIT_REPOSITORY || '';
   const repoBaseName = repoName.split('/').pop() || 'unknown-repo';
   const reportDir = getInput('report-dir') || REPORT_DIR_DEFAULT;
+  // 报告目录可能不存在（纯拦截钩子不生成报告），兜底生成前确保目录可写
+  fs.mkdirSync(reportDir, { recursive: true });
   const generated = [];
 
   const writeSarif = (name, sarifObj) => {
@@ -428,23 +430,26 @@ async function uploadScanReports(preCommitOutput) {
   }
 
   const reportDir = getInput('report-dir') || REPORT_DIR_DEFAULT;
-  if (!fs.existsSync(reportDir)) {
-    console.log(`[INFO] 报告目录不存在，跳过报告上传: ${reportDir}`);
-    return;
+
+  // 兜底：报告目录可能不存在（纯拦截钩子不生成报告），此时仍解析 pre-commit 日志生成兜底 SARIF。
+  // 目录存在时优先上传业务仓转换好的 *.sarif（用户提供的报告）。
+  const sarifFiles = [];
+  if (fs.existsSync(reportDir)) {
+    fs.readdirSync(reportDir)
+      .filter(f => f.endsWith('.sarif'))
+      .sort()
+      .forEach(f => sarifFiles.push(f));
+  } else {
+    console.log(`[INFO] 报告目录不存在，尝试从 pre-commit 日志兜底生成: ${reportDir}`);
   }
 
-  const sarifFiles = fs.readdirSync(reportDir)
-    .filter(f => f.endsWith('.sarif'))
-    .sort();
-
-  // 兜底：用户未提供 SARIF 时，解析 pre-commit 日志按工具生成兜底报告（仅当存在失败钩子）
   if (sarifFiles.length === 0) {
     const fallbackFiles = generateFallbackSarif(preCommitOutput);
     if (fallbackFiles.length > 0) {
       fallbackFiles.forEach(f => sarifFiles.push(f));
       console.log('[INFO] 报告目录中无业务仓 SARIF 报告，已根据 pre-commit 日志生成兜底 SARIF: ' + fallbackFiles.join(', '));
     } else {
-      console.log(`[INFO] 报告目录中无 SARIF 报告，且 pre-commit 检查无失败钩子，跳过报告上传: ${reportDir}`);
+      console.log(`[INFO] 无 SARIF 报告，且 pre-commit 检查无失败钩子，跳过报告上传: ${reportDir}`);
       return;
     }
   }
