@@ -291,7 +291,7 @@ function parsePreCommitLog(output) {
 /** 由 pre-commit 运行日志按工具维度补齐兜底 SARIF 文件，写入报告目录。
  * 每个失败钩子按规则处理：
  *   1. 用户已提供该工具 sarif 文件（报告目录中存在 <tool>.sarif）→ 直接使用，跳过日志解析
- *   2. 未提供，且工具在支持列表（第一批：clang-tidy/bandit/gosec/spotbugs/rust-clippy/eslint/gitleaks）
+ *   2. 未提供，且工具在支持列表（第一批：clang-tidy/bandit/gosec/spotbugs/rust-clippy/eslint/gitleaks/detect-secrets）
  *      → 解析日志生成 <tool>.sarif
  *   3. 未提供且不支持 → 不生成报告，仅提示 "<工具> 工具未查询到 sarif 文件，且暂不支持日志自动解析"
  * @param {string} preCommitOutput pre_commit run 的捕获输出（stdout+stderr）

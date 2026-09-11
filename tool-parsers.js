@@ -2,7 +2,7 @@
 
 /**
  * pre-commit 失败日志按工具解析（兜底 SARIF 数据源）。
- * 第一批支持：clang-tidy / bandit / gosec / spotbugs / rust-clippy / eslint / gitleaks。
+ * 第一批支持：clang-tidy / bandit / gosec / spotbugs / rust-clippy / eslint / gitleaks / detect-secrets。
  * 每种工具实现一个行解析器：输入失败钩子的输出块行（trimmed 非空），输出结构化 findings。
  * 供 pre-commit-action 在用户未提供 *.sarif 时生成 <tool>.sarif。
  */
@@ -275,6 +275,36 @@ function parseGitleaks(lines) {
   return findings.map(f => ({ ...f, helpUri: 'https://github.com/gitleaks/gitleaks' }));
 }
 
+/** detect-secrets（detect-secrets-hook 输出）："Secret Type: X" + "Location:    file:line" 成对格式 */
+function parseDetectSecrets(lines) {
+  const findings = [];
+  let cur = null;
+  const typeRe = /^Secret Type:\s*(.+)$/;
+  const locRe = /^Location:\s*(\S+):(\d+)(?::(\d+))?/;
+  for (const line of lines) {
+    const m = line.match(typeRe);
+    if (m) {
+      const type = m[1].trim();
+      cur = {
+        ruleId: type,
+        ruleDesc: type,
+        message: `Potential secret detected: ${type}`,
+        level: LEVEL_ERROR
+      };
+      findings.push(cur);
+      continue;
+    }
+    if (!cur) continue;
+    const lm = line.match(locRe);
+    if (lm) {
+      cur.file = lm[1];
+      cur.line = parseInt(lm[2], 10);
+      cur.column = lm[3] ? parseInt(lm[3], 10) : undefined;
+    }
+  }
+  return findings.map(f => ({ ...f, helpUri: 'https://github.com/Yelp/detect-secrets' }));
+}
+
 /** 工具映射表：hook id（小写）→ 解析器。 */
 const TOOL_PARSERS = [
   { toolName: 'clang-tidy', hooks: ['clang-tidy', 'clang_tidy'], parse: parseClangTidy },
@@ -283,7 +313,8 @@ const TOOL_PARSERS = [
   { toolName: 'spotbugs', hooks: ['spotbugs', 'spot-bugs'], parse: parseSpotbugs },
   { toolName: 'rust-clippy', hooks: ['rust-clippy', 'rust_clippy', 'clippy'], parse: parseClippy },
   { toolName: 'eslint', hooks: ['eslint'], parse: parseEslint },
-  { toolName: 'gitleaks', hooks: ['gitleaks'], parse: parseGitleaks }
+  { toolName: 'gitleaks', hooks: ['gitleaks'], parse: parseGitleaks },
+  { toolName: 'detect-secrets', hooks: ['detect-secrets', 'detect-secrets-report'], parse: parseDetectSecrets }
 ];
 
 /** 按失败钩子 id 匹配工具解析器；未支持的工具返回 null。 */
@@ -305,5 +336,6 @@ module.exports = {
   parseClippy,
   parseEslint,
   parseGitleaks,
+  parseDetectSecrets,
   TOOL_PARSERS
 };
