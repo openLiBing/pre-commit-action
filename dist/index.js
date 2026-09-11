@@ -208,10 +208,16 @@ function buildAutoArgs() {
   if ((eventName === 'mr' || eventName === 'pull_request' || eventName === 'note') && baseRef) {
     console.log(`[INFO] 检测到 PR 事件，目标分支: ${baseRef}`);
 
-    // 使用 ATOMGIT_TOKEN 配置 git 认证，确保 git fetch 能访问私有仓库
+    // 使用 ATOMGIT_TOKEN 注入 remote URL 认证，确保 git fetch 能访问私有仓库
     const autoToken = process.env.ATOMGIT_TOKEN || '';
     if (autoToken) {
-      execCapture(`git config http.extraheader "Authorization: Bearer ${autoToken}"`);
+      const remoteUrl = execCapture('git remote get-url origin') || '';
+      if (remoteUrl && remoteUrl.startsWith('https://')) {
+        const encodedToken = encodeURIComponent(autoToken);
+        // 尝试多种认证格式：x-access-token (GitHub兼容) / oauth2 (GitLab兼容)
+        const authUrl = remoteUrl.replace('https://', `https://x-access-token:${encodedToken}@`);
+        execCapture(`git remote set-url origin "${authUrl}"`);
+      }
     }
 
     console.log(`[INFO] 拉取目标分支 origin/${baseRef} 以获取增量文件`);
