@@ -294,11 +294,16 @@ function parsePreCommitLog(output) {
   return failures;
 }
 
-/** 由 pre-commit 运行日志生成兜底 SARIF 文件，写入报告目录。
- * 失败钩子按工具（第一批：clang-tidy/bandit/gosec/spotbugs/rust-clippy/eslint/gitleaks）解析出具体问题，
- * 生成 <tool>.sarif；未匹配到已知工具的失败钩子不生成报告，仅提示暂不支持日志自动解析。
- * @returns {string[]} 生成的兜底文件名数组（可能为空） */
-function generateFallbackSarif(preCommitOutput) {
+/** 由 pre-commit 运行日志按工具维度补齐兜底 SARIF 文件，写入报告目录。
+ * 每个失败钩子按规则处理：
+ *   1. 用户已提供该工具 sarif 文件（报告目录中存在 <tool>.sarif）→ 直接使用，跳过日志解析
+ *   2. 未提供，且工具在支持列表（第一批：clang-tidy/bandit/gosec/spotbugs/rust-clippy/eslint/gitleaks）
+ *      → 解析日志生成 <tool>.sarif
+ *   3. 未提供且不支持 → 不生成报告，仅提示 "<工具> 工具未查询到 sarif 文件，且暂不支持日志自动解析"
+ * @param {string} preCommitOutput pre_commit run 的捕获输出（stdout+stderr）
+ * @param {string[]} [existingSarifNames] 报告目录中已有的 *.sarif 文件名（用户提供的报告）
+ * @returns {string[]} 新生成的兜底文件名数组（可能为空） */
+function generateFallbackSarif(preCommitOutput, existingSarifNames) {
   const failures = parsePreCommitLog(preCommitOutput);
   if (failures.length === 0) return [];
   console.log(`[INFO] pre-commit 日志解析到 ${failures.length} 个失败钩子: ${failures.map(f => f.hookId).join(', ')}`);
@@ -307,6 +312,9 @@ function generateFallbackSarif(preCommitOutput) {
   // 报告目录可能不存在（纯拦截钩子不生成报告），兜底生成前确保目录可写
   fs.mkdirSync(reportDir, { recursive: true });
   const generated = [];
+
+  // 用户已提供的 sarif 文件名集合（小写），用于判断"该工具用户是否已输出 sarif"
+  const existing = new Set((existingSarifNames || []).map(n => String(n).toLowerCase()));
 
   const writeSarif = (name, sarifObj) => {
     try {
@@ -321,6 +329,13 @@ function generateFallbackSarif(preCommitOutput) {
 
   for (const f of failures) {
     const parser = matchToolParser(f.hookId);
+    const toolName = parser ? parser.toolName : String(f.hookId || '').toLowerCase();
+    // 规则1：该工具用户已输出 sarif → 直接使用，跳过日志解析
+    if (existing.has(`${toolName}.sarif`)) {
+      console.log(`[INFO] ${toolName} 已提供 sarif 文件，直接使用: ${toolName}.sarif`);
+      continue;
+    }
+    // 规则2：支持日志解析的工具 → 解析日志生成 <tool>.sarif
     if (parser) {
       const findings = parser.parse(f.lines || []);
       const sarifObj = buildToolSarif(parser.toolName, findings);
@@ -333,7 +348,8 @@ function generateFallbackSarif(preCommitOutput) {
         console.log(`[WARN] ${parser.toolName} 日志中未解析到可识别的问题条目`);
       }
     } else {
-      console.log(`[WARN] ${f.hookId} 工具未查询到 sarif 文件，且暂不支持日志自动解析`);
+      // 规则3：未提供 sarif 且不支持日志解析 → 仅提示
+      console.log(`[WARN] ${toolName} 工具未查询到 sarif 文件，且暂不支持日志自动解析`);
     }
   }
   return generated;
@@ -369,8 +385,7 @@ async function uploadScanReports(preCommitOutput) {
 
   const reportDir = getInput('report-dir') || REPORT_DIR_DEFAULT;
 
-  // 兜底：报告目录可能不存在（纯拦截钩子不生成报告），此时仍解析 pre-commit 日志生成兜底 SARIF。
-  // 目录存在时优先上传业务仓转换好的 *.sarif（用户提供的报告）。
+  // 用户提供的报告：报告目录下已有的 *.sarif（业务仓转换好的，直接使用）
   const sarifFiles = [];
   if (fs.existsSync(reportDir)) {
     fs.readdirSync(reportDir)
@@ -381,15 +396,17 @@ async function uploadScanReports(preCommitOutput) {
     console.log(`[INFO] 报告目录不存在，尝试从 pre-commit 日志兜底生成: ${reportDir}`);
   }
 
+  // 按工具维度补齐：失败钩子对应工具已有用户 sarif 直接用；
+  // 未提供且支持日志解析则生成 <tool>.sarif；未提供且不支持则提示。
+  const fallbackFiles = generateFallbackSarif(preCommitOutput, sarifFiles);
+  if (fallbackFiles.length > 0) {
+    fallbackFiles.forEach(f => sarifFiles.push(f));
+    console.log('[INFO] 已根据 pre-commit 日志生成兜底 SARIF: ' + fallbackFiles.join(', '));
+  }
+
   if (sarifFiles.length === 0) {
-    const fallbackFiles = generateFallbackSarif(preCommitOutput);
-    if (fallbackFiles.length > 0) {
-      fallbackFiles.forEach(f => sarifFiles.push(f));
-      console.log('[INFO] 报告目录中无业务仓 SARIF 报告，已根据 pre-commit 日志生成兜底 SARIF: ' + fallbackFiles.join(', '));
-    } else {
-      console.log(`[INFO] 无 SARIF 报告，且 pre-commit 检查无失败钩子，跳过报告上传: ${reportDir}`);
-      return;
-    }
+    console.log(`[INFO] 无 SARIF 报告可上传（失败钩子工具均未提供 sarif 且不支持日志解析），跳过报告上传: ${reportDir}`);
+    return;
   }
 
   console.log(`[OK] 发现 ${sarifFiles.length} 个 SARIF 报告:`);
