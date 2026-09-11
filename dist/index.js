@@ -294,6 +294,27 @@ function parsePreCommitLog(output) {
   return failures;
 }
 
+/** 为 SARIF results 补充 region.snippet（实际代码行内容），提升后端告警可读性。
+ * 文件路径为相对仓库根的路径（pre-commit 在仓库根运行）；读取失败静默跳过，不阻断报告生成。 */
+function enrichRegionSnippet(sarifObj) {
+  const results = sarifObj && sarifObj.runs && sarifObj.runs[0] && sarifObj.runs[0].results;
+  if (!results) return;
+  for (const r of results) {
+    const loc = r.locations && r.locations[0] && r.locations[0].physicalLocation;
+    if (!loc || !loc.artifactLocation || !loc.artifactLocation.uri || !loc.region || !loc.region.startLine) continue;
+    let lines;
+    try {
+      lines = fs.readFileSync(loc.artifactLocation.uri, 'utf-8').split(/\r?\n/);
+    } catch (e) {
+      continue; // 文件不存在或不可读（路径含特殊字符等），跳过 snippet
+    }
+    const idx = loc.region.startLine - 1;
+    if (idx >= 0 && idx < lines.length) {
+      loc.region.snippet = { text: lines[idx] };
+    }
+  }
+}
+
 /** 由 pre-commit 运行日志按工具维度补齐兜底 SARIF 文件，写入报告目录。
  * 每个失败钩子按规则处理：
  *   1. 用户已提供该工具 sarif 文件（报告目录中存在 <tool>.sarif）→ 直接使用，跳过日志解析
@@ -318,6 +339,8 @@ function generateFallbackSarif(preCommitOutput, existingSarifNames) {
 
   const writeSarif = (name, sarifObj) => {
     try {
+      // 补充 region.snippet（实际代码行），提升后端告警可读性；读取失败不影响报告本身
+      enrichRegionSnippet(sarifObj);
       fs.writeFileSync(path.join(reportDir, name), JSON.stringify(sarifObj, null, 2), 'utf-8');
       generated.push(name);
       return true;
@@ -582,7 +605,7 @@ if (require.main === require.cache[eval('__filename')]) {
   });
 }
 
-module.exports = { run, parsePreCommitLog, generateFallbackSarif, _locationHash };
+module.exports = { run, parsePreCommitLog, generateFallbackSarif, enrichRegionSnippet, _locationHash };
 
 
 /***/ }),
