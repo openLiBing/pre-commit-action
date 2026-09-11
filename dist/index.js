@@ -208,20 +208,14 @@ function buildAutoArgs() {
   if ((eventName === 'mr' || eventName === 'pull_request' || eventName === 'note') && baseRef) {
     console.log(`[INFO] 检测到 PR 事件，目标分支: ${baseRef}`);
 
-    // 先看 checkout 已配置了哪些 git 凭据
-    console.log(`[DEBUG] git credential config:`);
-    console.log(execCapture('git config --list | grep -i credential') || '(无)');
-    console.log(`[DEBUG] git remote -v:`);
-    console.log(execCapture('git remote -v') || '(无)');
-
-    // 使用 ATOMGIT_TOKEN 配置 git credential helper
-    const autoToken = process.env.ATOMGIT_TOKEN || '';
-    if (autoToken) {
-      const remoteUrl = execCapture('git remote get-url origin') || '';
-      const hostMatch = remoteUrl.match(/https?:\/\/([^\/]+)/);
-      const host = hostMatch ? hostMatch[1] : '';
-      if (host) {
-        execCapture(`git config --global credential.${host}.helper "!f() { echo username=x-access-token; echo password=${autoToken}; }; f"`);
+    // 使用 gc_token 注入 remote URL 认证，确保 git fetch 能访问私有仓库
+    const token = getInput('gc_token');
+    if (token) {
+      const remoteUrl = execCapture('git remote get-url origin');
+      if (remoteUrl && remoteUrl.startsWith('https://')) {
+        const encodedToken = encodeURIComponent(token);
+        const authUrl = remoteUrl.replace('https://', `https://oauth2:${encodedToken}@`);
+        execCapture(`git remote set-url origin "${authUrl}"`);
       }
     }
 
