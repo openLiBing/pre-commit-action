@@ -48165,7 +48165,8 @@ function buildToolSarif(toolName, findings) {
 /** clang-tidy：path:line[:col]: warning|error|note: message [rule-id] */
 function parseClangTidy(lines) {
   const findings = [];
-  const re = /^(.+):(\d+)(?::(\d+))?:\s*(warning|error|note):\s*(.+?)\s*(?:\[([^\]]+)\])?$/;
+  // 非贪婪匹配路径段，避免 path:line:col 三段时行号被吞进 file（贪婪会匹配到最后一个冒号前的 ":line"）
+  const re = /^(.+?):(\d+)(?::(\d+))?:\s*(warning|error|note):\s*(.+?)\s*(?:\[([^\]]+)\])?$/;
   for (const line of lines) {
     const m = line.match(re);
     if (!m) continue;
@@ -48251,7 +48252,8 @@ function parseGosec(lines) {
 /** SpotBugs（-textui 默认格式）：H|M|L CATEGORY TYPE: message  In class X  In method Y  At File.java:[line n] */
 function parseSpotbugs(lines) {
   const findings = [];
-  const re = /^([HML])\s+\S+\s+([\w\.]+):\s*(.+?)\s+In class\s+(\S+)\s+In method\s+(.+?)\s+At\s+(\S+):\[line\s+(\d+)(?:-(\d+))?\]/;
+  // 格式：M DLS_DEAD_LOCAL_STORE: message  In class Foo  In method bar  At Foo.java:[line 10]
+  const re = /^([HML])\s+([\w\.]+):\s*(.+?)\s+In class\s+(\S+)\s+In method\s+(.+?)\s+At\s+(\S+):\[line\s+(\d+)(?:-(\d+))?\]/;
   for (const line of lines) {
     const m = line.match(re);
     if (!m) continue;
