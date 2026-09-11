@@ -1,4 +1,5 @@
-const { execSync, execFileSync } = require('child_process');
+const { execSync, execFileSync, spawnSync } = require('child_process');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const ObsClient = require('esdk-obs-nodejs');
@@ -171,25 +172,22 @@ function buildAutoArgs() {
 function runPreCommit(cmdResult) {
   if (cmdResult.type === 'skip') {
     console.log('[OK] 无需检查');
-    return false;
+    return { failed: false, output: '' };
   }
 
-  let checkFailed = false;
+  // 捕获 pre_commit run 的输出（stdout+stderr），用于用户未提供 SARIF 时的日志兜底解析；
+  // 同时原样转发到控制台，不改变既有日志可见性。
+  const runArgs = cmdResult.type === 'file'
+    ? ['-m', 'pre_commit', 'run', '--files', ...cmdResult.files]
+    : ['-m', 'pre_commit', 'run', ...cmdResult.args.split(' ')];
+  console.log(`> python ${runArgs.join(' ')}`);
 
-  if (cmdResult.type === 'file') {
-    try {
-      execFile('python', ['-m', 'pre_commit', 'run', '--files', ...cmdResult.files]);
-    } catch (e) {
-      checkFailed = true;
-    }
-  } else {
-    try {
-      execFile('python', ['-m', 'pre_commit', 'run', ...cmdResult.args.split(' ')]);
-    } catch (e) {
-      checkFailed = true;
-    }
-  }
+  const sp = spawnSync('python', runArgs, { encoding: 'utf-8', cwd: process.cwd() });
+  const output = (sp.stdout || '') + (sp.stderr || '');
+  if (sp.stdout) process.stdout.write(sp.stdout);
+  if (sp.stderr) process.stderr.write(sp.stderr);
 
+  const checkFailed = sp.status !== 0;
   if (checkFailed) {
     console.log('[ERROR] pre-commit 检查失败');
     console.log('\n[INFO] 请在本地执行以下命令修复后重新提交:');
@@ -203,11 +201,157 @@ function runPreCommit(cmdResult) {
     }
     console.log('\n如需了解更多告警屏蔽、pre-commit配置等信息，请查阅: https://gitcode.com/openlibing/docs/blob/main/static-code-analysis/solutions/pre-commit-solution.md');
     // 不在此退出：pre-commit 失败时扫描报告同样有价值，报告上传完成后由 run() 统一按失败状态退出
-    return true;
+    return { failed: true, output };
   }
   console.log('[OK] pre-commit 检查通过');
   console.log('如需了解更多告警屏蔽、pre-commit配置等信息，请查阅: https://gitcode.com/openlibing/docs/blob/main/static-code-analysis/solutions/pre-commit-solution.md');
-  return false;
+  return { failed: false, output };
+}
+
+/** sha256 hex，用于兜底 SARIF 指纹（后端 StandardSarifParser 用 partialFingerprints.primaryLocationLineHash 构建 fingerprintKey）。 */
+function _locationHash(parts) {
+  const raw = parts.map((p) => (p === undefined || p === null ? '' : String(p))).join('|');
+  return crypto.createHash('sha256').update(raw, 'utf8').digest('hex');
+}
+
+/** 解析 pre-commit 运行日志，提取失败的钩子（兜底 SARIF 数据源）。
+ * pre-commit 标准输出格式：
+ *   trailing whitespace.................................................Failed
+ *   - hook id: trailing-whitespace
+ *   - exit code: 1
+ *
+ *     Files were modified by this hook. Additional output:
+ *
+ *     src/foo.py
+ *   detect-secrets-report................................................Passed
+ * @returns {Array<{hookId: string, exitCode: (number|null), message: string, files: string[]}>}
+ */
+function parsePreCommitLog(output) {
+  const failures = [];
+  const lines = String(output || '').split('\n');
+  // hook id 可能含空格（如 "trailing whitespace"），非贪婪捕获 + 至少 3 个点分隔状态
+  const hookLineRe = /^(.+?)\s*\.{3,}\s*(Failed|Passed)\s*$/;
+  // 疑似文件路径：单 token，可带 :line / :line:col 后缀（flake8/eslint 等 "path:1:1: msg" 只取 path 段）
+  const pathLikeRe = /^[^\s:=]+$/;
+
+  let current = null;      // 当前失败的钩子
+  let collecting = false;  // 是否在收集失败钩子的输出块
+
+  for (const line of lines) {
+    const m = line.match(hookLineRe);
+    if (m) {
+      if (m[2] === 'Failed') {
+        current = { hookId: m[1].trim(), exitCode: null, message: '', files: [] };
+        failures.push(current);
+      } else {
+        current = null;
+      }
+      collecting = false;
+      continue;
+    }
+    if (!current) continue;
+
+    const hookIdMatch = line.match(/^-\s*hook id:\s*(\S+)/);
+    if (hookIdMatch) {
+      current.hookId = hookIdMatch[1];
+      collecting = true;
+      continue;
+    }
+    const exitMatch = line.match(/^-\s*exit code:\s*(\d+)/);
+    if (exitMatch) {
+      current.exitCode = parseInt(exitMatch[1], 10);
+      continue;
+    }
+    if (!collecting) continue;
+
+    const trimmed = line.trim();
+    if (!trimmed || /^-{3,}$/.test(trimmed)) continue;
+    if (/^-\s*\S/.test(trimmed)) continue; // "- hook id/exit code" 外的其他 " - xxx" 元信息行
+    // detect-secrets 输出 "Filename: .env" → 提取文件（行可能带前导空格，用 trimmed 匹配）
+    const fnMatch = trimmed.match(/^Filename:\s*(\S+)/);
+    if (fnMatch) {
+      if (current.files.length < 50) current.files.push(fnMatch[1]);
+      continue;
+    }
+    // "Files were modified by this hook." / "Additional output:" 等说明行不作为文件，但可作 message 上下文
+    if (pathLikeRe.test(trimmed) && !/^(Files|Additional|All|Total|skipping|Skipping)/i.test(trimmed)) {
+      if (current.files.length < 50) current.files.push(trimmed);
+    } else if (current.message.length === 0) {
+      current.message = trimmed.slice(0, 300);
+    }
+  }
+  return failures;
+}
+
+/** 由 pre-commit 失败钩子生成兜底 SARIF（用户未提供 *.sarif 时使用）。 */
+function buildFallbackSarif(failures, repoBaseName) {
+  const rules = [];
+  const results = [];
+  for (const f of failures) {
+    const ruleId = f.hookId || 'pre-commit';
+    const summary = `pre-commit hook '${f.hookId}' failed${f.exitCode !== null ? ` (exit code ${f.exitCode})` : ''}`;
+    rules.push({
+      id: ruleId,
+      name: ruleId,
+      shortDescription: { text: summary },
+      helpUri: 'https://pre-commit.com/'
+    });
+    // 提取不到具体文件时用仓库名占位，保证 location 与指纹非空
+    const files = f.files.length > 0 ? f.files : [repoBaseName];
+    for (const file of files) {
+      const locationHash = _locationHash([ruleId, file, f.exitCode, f.message]);
+      results.push({
+        ruleId,
+        level: 'error',
+        message: { text: f.message || summary },
+        locations: [{
+          physicalLocation: {
+            artifactLocation: { uri: file },
+            region: { startLine: 1 }
+          }
+        }],
+        partialFingerprints: { primaryLocationLineHash: locationHash }
+      });
+    }
+  }
+  if (rules.length === 0) return null;
+  return {
+    version: '2.1.0',
+    $schema: 'https://json.schemastore.org/sarif-2.1.0.json',
+    runs: [{
+      tool: {
+        driver: {
+          name: 'pre-commit',
+          informationUri: 'https://pre-commit.com/',
+          rules
+        }
+      },
+      results
+    }]
+  };
+}
+
+/** 由 pre-commit 运行日志生成兜底 SARIF 文件，写入报告目录。
+ * @returns {string|null} 兜底文件名（pre-commit-fallback.sarif）或 null（无失败钩子/写入失败） */
+function generateFallbackSarif(preCommitOutput) {
+  const failures = parsePreCommitLog(preCommitOutput);
+  if (failures.length === 0) return null;
+  console.log(`[INFO] pre-commit 日志解析到 ${failures.length} 个失败钩子: ${failures.map(f => f.hookId).join(', ')}`);
+
+  const repoName = process.env.ATOMGIT_REPOSITORY || '';
+  const repoBaseName = repoName.split('/').pop() || 'unknown-repo';
+  const sarifObj = buildFallbackSarif(failures, repoBaseName);
+  if (!sarifObj) return null;
+
+  const fallbackName = 'pre-commit-fallback.sarif';
+  try {
+    fs.writeFileSync(path.join(getInput('report-dir') || REPORT_DIR_DEFAULT, fallbackName),
+      JSON.stringify(sarifObj, null, 2), 'utf-8');
+    return fallbackName;
+  } catch (e) {
+    console.log(`[WARN] 生成兜底 SARIF 写入失败: ${e.message}`);
+    return null;
+  }
 }
 
 /** 是否为 PR 类型触发（PR 触发不进行报告扫描上传回调）。与 buildAutoArgs 的 PR 判断保持一致。 */
@@ -227,9 +371,10 @@ function resolveBranch() {
     : (process.env.ATOMGIT_REF_NAME || '');
 }
 
-/** 扫描报告上传：SARIF 报告 → OBS → APIG 回调。SARIF 转换由业务仓负责（detect-secrets/gitleaks
- * JSON 在业务仓 workflow 中转换为 SARIF 后写入约定目录），插件只上传转换后的 *.sarif 文件。PR 类型触发跳过。 */
-async function uploadScanReports() {
+/** 扫描报告上传：SARIF 报告 → OBS → APIG 回调。优先上传业务仓转换好的 *.sarif（用户提供的报告）；
+ * 若报告目录无 *.sarif，则解析 pre-commit 运行日志生成兜底 SARIF（防止用户未提供报告的场景）。
+ * PR 类型触发跳过。@param {string} preCommitOutput pre_commit run 的捕获输出（stdout+stderr） */
+async function uploadScanReports(preCommitOutput) {
   console.log('\n===== [7] 报告扫描上传（SARIF 报告 → OBS → APIG 回调） =====');
 
   if (isPrEvent()) {
@@ -246,10 +391,19 @@ async function uploadScanReports() {
   const sarifFiles = fs.readdirSync(reportDir)
     .filter(f => f.endsWith('.sarif'))
     .sort();
+
+  // 兜底：用户未提供 SARIF 时，解析 pre-commit 日志生成兜底报告（仅当存在失败钩子）
   if (sarifFiles.length === 0) {
-    console.log(`[INFO] 报告目录中无 SARIF 报告（业务仓需先将 JSON 转为 *.sarif 写入该目录），跳过报告上传: ${reportDir}`);
-    return;
+    const fallbackFile = generateFallbackSarif(preCommitOutput);
+    if (fallbackFile) {
+      sarifFiles.push(fallbackFile);
+      console.log('[INFO] 报告目录中无业务仓 SARIF 报告，已根据 pre-commit 日志生成兜底 SARIF: ' + fallbackFile);
+    } else {
+      console.log(`[INFO] 报告目录中无 SARIF 报告，且 pre-commit 检查无失败钩子，跳过报告上传: ${reportDir}`);
+      return;
+    }
   }
+
   console.log(`[OK] 发现 ${sarifFiles.length} 个 SARIF 报告:`);
   sarifFiles.forEach(f => console.log(`  - ${f}`));
 
@@ -405,18 +559,22 @@ async function run() {
   }
 
   console.log('\n===== [6] 运行 pre-commit 检查 =====');
-  const preCommitFailed = runPreCommit(cmdResult);
+  const preCommitResult = runPreCommit(cmdResult);
 
-  await uploadScanReports();
+  await uploadScanReports(preCommitResult.output);
 
-  if (preCommitFailed) {
+  if (preCommitResult.failed) {
     console.log('[ERROR] pre-commit 检查失败，扫描报告已上传，任务按失败状态退出');
     process.exit(1);
   }
 }
 
-run().catch(err => {
-  const sanitizedMessage = sanitizePath(err.message);
-  console.error(`Action 执行失败: ${sanitizedMessage}`);
-  process.exit(1);
-});
+if (require.main === module) {
+  run().catch(err => {
+    const sanitizedMessage = sanitizePath(err.message);
+    console.error(`Action 执行失败: ${sanitizedMessage}`);
+    process.exit(1);
+  });
+}
+
+module.exports = { run, parsePreCommitLog, buildFallbackSarif, generateFallbackSarif, _locationHash };
