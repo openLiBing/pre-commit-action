@@ -288,65 +288,15 @@ function parsePreCommitLog(output) {
   return failures;
 }
 
-/** 由 pre-commit 失败钩子生成兜底 SARIF（用户未提供 *.sarif 时使用）。 */
-function buildFallbackSarif(failures, repoBaseName) {
-  const rules = [];
-  const results = [];
-  for (const f of failures) {
-    const ruleId = f.hookId || 'pre-commit';
-    const summary = `pre-commit hook '${f.hookId}' failed${f.exitCode !== null ? ` (exit code ${f.exitCode})` : ''}`;
-    rules.push({
-      id: ruleId,
-      name: ruleId,
-      shortDescription: { text: summary },
-      helpUri: 'https://pre-commit.com/'
-    });
-    // 提取不到具体文件时用仓库名占位，保证 location 与指纹非空
-    const files = f.files.length > 0 ? f.files : [repoBaseName];
-    for (const file of files) {
-      const locationHash = _locationHash([ruleId, file, f.exitCode, f.message]);
-      results.push({
-        ruleId,
-        level: 'error',
-        message: { text: f.message || summary },
-        locations: [{
-          physicalLocation: {
-            artifactLocation: { uri: file },
-            region: { startLine: 1 }
-          }
-        }],
-        partialFingerprints: { primaryLocationLineHash: locationHash }
-      });
-    }
-  }
-  if (rules.length === 0) return null;
-  return {
-    version: '2.1.0',
-    $schema: 'https://json.schemastore.org/sarif-2.1.0.json',
-    runs: [{
-      tool: {
-        driver: {
-          name: 'pre-commit',
-          informationUri: 'https://pre-commit.com/',
-          rules
-        }
-      },
-      results
-    }]
-  };
-}
-
 /** 由 pre-commit 运行日志生成兜底 SARIF 文件，写入报告目录。
  * 失败钩子按工具（第一批：clang-tidy/bandit/gosec/spotbugs/rust-clippy/eslint/gitleaks）解析出具体问题，
- * 生成 <tool>.sarif；未匹配到已知工具的失败钩子合并生成通用 pre-commit-fallback.sarif。
+ * 生成 <tool>.sarif；未匹配到已知工具的失败钩子不生成报告，仅提示暂不支持日志自动解析。
  * @returns {string[]} 生成的兜底文件名数组（可能为空） */
 function generateFallbackSarif(preCommitOutput) {
   const failures = parsePreCommitLog(preCommitOutput);
   if (failures.length === 0) return [];
   console.log(`[INFO] pre-commit 日志解析到 ${failures.length} 个失败钩子: ${failures.map(f => f.hookId).join(', ')}`);
 
-  const repoName = process.env.ATOMGIT_REPOSITORY || '';
-  const repoBaseName = repoName.split('/').pop() || 'unknown-repo';
   const reportDir = getInput('report-dir') || REPORT_DIR_DEFAULT;
   // 报告目录可能不存在（纯拦截钩子不生成报告），兜底生成前确保目录可写
   fs.mkdirSync(reportDir, { recursive: true });
@@ -363,7 +313,6 @@ function generateFallbackSarif(preCommitOutput) {
     }
   };
 
-  const unmatched = [];
   for (const f of failures) {
     const parser = matchToolParser(f.hookId);
     if (parser) {
@@ -376,20 +325,9 @@ function generateFallbackSarif(preCommitOutput) {
         }
       } else {
         console.log(`[WARN] ${parser.toolName} 日志中未解析到可识别的问题条目`);
-        unmatched.push(f);
       }
     } else {
-      unmatched.push(f);
-    }
-  }
-
-  if (unmatched.length > 0) {
-    const sarifObj = buildFallbackSarif(unmatched, repoBaseName);
-    if (sarifObj) {
-      const name = 'pre-commit-fallback.sarif';
-      if (writeSarif(name, sarifObj)) {
-        console.log(`[INFO] ${unmatched.length} 个未匹配工具的失败钩子合并生成通用兜底 SARIF: ${name}`);
-      }
+      console.log(`[WARN] ${f.hookId} 工具未查询到 sarif 文件，且暂不支持日志自动解析`);
     }
   }
   return generated;
@@ -621,4 +559,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { run, parsePreCommitLog, buildFallbackSarif, generateFallbackSarif, _locationHash };
+module.exports = { run, parsePreCommitLog, generateFallbackSarif, _locationHash };
