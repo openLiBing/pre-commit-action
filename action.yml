@@ -4,6 +4,18 @@ author: "test-devops"
 description: "安装 pre-commit 并对代码仓库执行钩子检查"
 
 inputs:
+  gc_token:
+    description: "pre-commit 增量检查时所需密钥（私有仓库 git fetch 认证用）"
+    required: false
+    default: ""
+    layout:
+      type: "input"
+      label: "Git 认证 Token"
+      extend_prop:
+        visible_conditions: []
+        disabled_conditions: []
+      validation:
+        required_message: ""
   extra_args:
     description: "pre-commit 运行参数。为空时使用 --all-files 检查全量文件；填写时按指定参数执行"
     required: false
