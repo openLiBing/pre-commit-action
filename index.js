@@ -134,15 +134,15 @@ function buildAutoArgs() {
   if ((eventName === 'mr' || eventName === 'pull_request' || eventName === 'note') && baseRef) {
     console.log(`[INFO] 检测到 PR 事件，目标分支: ${baseRef}`);
 
-    // 使用 ATOMGIT_TOKEN 注入 remote URL 认证，确保 git fetch 能访问私有仓库
+    // 使用 ATOMGIT_TOKEN 配置 git credential helper，确保 git fetch 能访问私有仓库
     const autoToken = process.env.ATOMGIT_TOKEN || '';
     if (autoToken) {
       const remoteUrl = execCapture('git remote get-url origin') || '';
-      if (remoteUrl && remoteUrl.startsWith('https://')) {
-        const encodedToken = encodeURIComponent(autoToken);
-        // 尝试多种认证格式：x-access-token (GitHub兼容) / oauth2 (GitLab兼容)
-        const authUrl = remoteUrl.replace('https://', `https://x-access-token:${encodedToken}@`);
-        execCapture(`git remote set-url origin "${authUrl}"`);
+      const hostMatch = remoteUrl.match(/https?:\/\/([^\/]+)/);
+      const host = hostMatch ? hostMatch[1] : '';
+      if (host) {
+        // 配置 credential helper，为该 host 提供 token 认证
+        execCapture(`git config --global credential.${host}.helper "!f() { echo username=x-access-token; echo password=${autoToken}; }; f"`);
       }
     }
 
