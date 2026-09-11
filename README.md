@@ -88,7 +88,7 @@ jobs:
 
 - **PR 类型触发**（mr / pull_request / note）只做检查，不进行报告上传回调
 - **检查失败仍上传**：pre-commit 失败时已生成的报告仍会上传，随后按失败标志退出
-- **兜底能力**：报告目录无 `*.sarif`（用户未提供报告）时，插件解析 pre-commit 运行日志，对失败的钩子生成 `pre-commit-fallback.sarif`（每个失败钩子一个 rule，尽量提取受影响文件，无法提取时用仓库名占位）并上传；日志无失败钩子则跳过上传
+- **兜底能力**：报告目录无 `*.sarif`（用户未提供报告）时，插件解析 pre-commit 运行日志，按工具生成兜底 SARIF 并上传。第一批支持解析：**clang-tidy / bandit / gosec / spotbugs / rust-clippy / eslint / gitleaks**，每个失败钩子解析出具体问题（文件/行/列/规则/级别）生成 `<tool>.sarif`；未匹配到已知工具的失败钩子合并生成通用 `pre-commit-fallback.sarif`；日志无失败钩子则跳过上传
 - **上传/回调失败仅告警**，不阻断检查结果；回调会校验 HTTP 状态 + 响应体业务码（后端业务错误恒为 HTTP 200，只看状态会误报成功）
 
 ## 使用示例
