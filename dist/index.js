@@ -41,9 +41,19 @@ function getInput(name) {
   const trimmed = val.trim();
 
   if (name === 'extra_args' && trimmed) {
-    const allowedArgs = ['--all', '--all-files', '--help', '--show-diff-on-failure'];
+    const allowedArgs = ['--all', '--all-files', '--help', '--show-diff-on-failure', '--from-ref', '--to-ref', '--files'];
+    const argsWithValue = ['--from-ref', '--to-ref', '--files'];
     const args = trimmed.split(' ');
+    let skipNext = false;
     for (const arg of args) {
+      if (skipNext) {
+        skipNext = false;
+        continue;
+      }
+      if (argsWithValue.includes(arg)) {
+        skipNext = true;
+        continue;
+      }
       if (!allowedArgs.includes(arg) && !arg.startsWith('--')) {
         console.log(`[ERROR] Invalid extra_args: ${arg}. Only -- arguments are allowed.`);
         process.exit(1);
@@ -148,6 +158,7 @@ function buildAutoArgs() {
   if ((eventName === 'mr' || eventName === 'pull_request' || eventName === 'note') && baseRef) {
     console.log(`[INFO] 检测到 PR 事件，目标分支: ${baseRef}`);
 
+    // 使用 gc_token 注入 remote URL 认证，确保 git fetch 能访问私有仓库
     const token = getInput('gc_token');
     if (token) {
       const remoteUrl = execCapture('git remote get-url origin');
@@ -161,15 +172,8 @@ function buildAutoArgs() {
     console.log(`[INFO] 拉取目标分支 origin/${baseRef} 以获取增量文件`);
     execFile('git', ['fetch', 'origin', baseRef]);
 
-    const diffFilesOutput = execFileSync('git', ['diff', 'FETCH_HEAD', '--name-only', '--diff-filter=ACMR'], { encoding: 'utf-8' });
-    const files = diffFilesOutput.split('\n').filter(f => f.trim());
-    if (files.length === 0) {
-      console.log('[INFO] PR 无变更文件，跳过增量检查');
-      return { type: 'skip' };
-    }
-    console.log(`[INFO] PR 增量文件 (${files.length} 个):`);
-    files.forEach(f => console.log(`  - ${f}`));
-    return { type: 'file', files: files };
+    console.log(`[INFO] 使用 --from-ref FETCH_HEAD --to-ref HEAD 增量检查`);
+    return { type: 'args', args: `--from-ref FETCH_HEAD --to-ref HEAD` };
   }
 
   console.log('[INFO] 非 PR 事件，使用 --all-files 检查全量文件');
@@ -206,12 +210,12 @@ function runPreCommit(cmdResult) {
     } else {
       console.log('   pre-commit run --all-files');
     }
-    console.log('\n如需了解更多告警屏蔽、pre-commit配置等信息，请查阅: https://gitcode.com/openlibing/docs/blob/main/static-code-analysis/solutions/pre-commit-solution.md');
+    console.log('\n如需了解更多告警屏蔽、pre-commit配置等信息，请查阅: https://gitcode.com/openlibing/docs/blob/main/static-code-analysis/solutions/pre-commit/README.md');
     // 不在此退出：pre-commit 失败时扫描报告同样有价值，报告上传完成后由 run() 统一按失败状态退出
     return { failed: true, output };
   }
   console.log('[OK] pre-commit 检查通过');
-  console.log('如需了解更多告警屏蔽、pre-commit配置等信息，请查阅: https://gitcode.com/openlibing/docs/blob/main/static-code-analysis/solutions/pre-commit-solution.md');
+  console.log('如需了解更多告警屏蔽、pre-commit配置等信息，请查阅: https://gitcode.com/openlibing/docs/blob/main/static-code-analysis/solutions/pre-commit/README.md');
   return { failed: false, output };
 }
 
@@ -598,7 +602,7 @@ async function run() {
   const extraArgs = getInput('extra_args');
   console.log('===== pre-commit-action 启动 =====');
 
-  console.log('\n===== [1] 检查 Python 环境 =====');
+console.log('\n===== [1] 检查 Python 环境 =====');
   execFile('python', ['--version']);
 
   console.log('\n===== [2] 安装 pre-commit =====');
@@ -614,7 +618,22 @@ async function run() {
   } else {
     console.log('[WARN] Go 未安装，跳过 Go 代理配置');
   }
-  execFile('python', ['-m', 'pip', 'install', '--upgrade', 'pip', '--timeout', PIP_TIMEOUT]);
+  const MIN_PIP_VERSION = '21.0';
+  const pipVersionOutput = execCapture('python -m pip --version');
+  const pipVersionMatch = pipVersionOutput.match(/pip\s+(\d+\.\d+)/);
+  if (pipVersionMatch) {
+    const currentVersion = parseFloat(pipVersionMatch[1]);
+    const minVersion = parseFloat(MIN_PIP_VERSION);
+    if (currentVersion >= minVersion) {
+      console.log(`[OK] pip ${pipVersionMatch[1]} 已安装且 >= ${MIN_PIP_VERSION}，跳过升级`);
+    } else {
+      console.log(`[INFO] pip ${pipVersionMatch[1]} < ${MIN_PIP_VERSION}，使用 --ignore-installed 升级（避免卸载系统 pip 失败）`);
+      execFile('python', ['-m', 'pip', 'install', '--ignore-installed', '--upgrade', 'pip', '--timeout', PIP_TIMEOUT]);
+    }
+  } else {
+    console.log('[INFO] pip 未安装，开始安装 pip');
+    execFile('python', ['-m', 'pip', 'install', '--upgrade', 'pip', '--timeout', PIP_TIMEOUT]);
+  }
   execFile('python', ['-m', 'pip', 'install', 'pre-commit', '--timeout', PIP_TIMEOUT]);
   execFile('python', ['-m', 'pre_commit', '--version']);
 
