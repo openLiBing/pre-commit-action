@@ -10,6 +10,7 @@
 | ---------- | ---------------------------------------------------------------------------------------------- | ---- | -------------- |
 | extra_args | pre-commit 运行参数。为空时自动判断：PR 事件检查增量文件，非 PR 检查全量；填写时按指定参数执行 | 否   | 空（自动判断） |
 | report-dir | SARIF 报告约定目录（机器临时目录，非代码仓目录）。SARIF 转换由业务仓负责（detect-secrets/gitleaks JSON 在业务仓 workflow 中转成 `*.sarif` 写入该目录），插件读取该目录下 `*.sarif` 上传 OBS 并回调 openlibing 后端。PR 类型触发不进行报告上传回调 | 否   | /tmp/pre-commit-reports/ |
+| sarif-file | SARIF 文件/目录路径，逗号分隔支持多值（与 openlibing-upload-sarif 的 `sarif_file` 一致）：单个文件、多个文件、单个目录、多个目录（目录自动扫描其中所有 `.sarif` 文件，非递归）。填写后优先于 `report-dir` 目录扫描；未填写时回退扫描 `report-dir` 目录下 `*.sarif` | 否   | 空（回退 report-dir） |
 | env-type   | 回调环境类型：prod（正式环境 apig.openlibing.com）或 beta（测试环境华为云 APIG 实例域名） | 否   | prod          |
 | debug      | 开启 SDK 调试定位日志（请求/响应详情，敏感字段自动脱敏）                                        | 否   | false          |
 
@@ -88,7 +89,9 @@ jobs:
 
 - **PR 类型触发**（mr / pull_request / note）只做检查，不进行报告上传回调
 - **检查失败仍上传**：pre-commit 失败时已生成的报告仍会上传，随后按失败标志退出
-- **兜底能力**：按工具维度处理失败钩子的报告。每个失败钩子：① 用户已在报告目录提供该工具的 `*.sarif` → 直接使用；② 未提供且工具在支持解析列表（第一批：**clang-tidy / bandit / gosec / spotbugs / rust-clippy / eslint / gitleaks / detect-secrets**）→ 解析日志出具体问题（文件/行/列/规则/级别）生成 `<tool>.sarif`；③ 未提供且不支持 → 不生成报告，仅提示"`<工具> 未查询到 sarif 文件，且暂不支持日志自动解析"。日志无失败钩子则跳过上传
+- **数据源优先级**：① 输入 `sarif-file` 指定的文件/目录（支持逗号多值）；② 报告目录 `report-dir` 下已有的 `*.sarif`；③ 均无且日志有失败钩子时走兜底能力。同一工具已提供报告则直接使用，不再日志解析
+- **兜底能力**：按工具维度处理失败钩子的报告。每个失败钩子：① 用户已提供该工具的 `*.sarif` → 直接使用；② 未提供且工具在支持解析列表（第一批：**clang-tidy / bandit / gosec / spotbugs / rust-clippy / eslint / gitleaks / detect-secrets**）→ 解析日志出具体问题（文件/行/列/规则/级别）生成 `<tool>.sarif`；③ 未提供且不支持 → 不生成报告，仅提示"`<工具> 未查询到 sarif 文件，且暂不支持日志自动解析"。日志无失败钩子则跳过上传
+- **OBS 路径结构**：`pre-commit-results/{仓库名}/{yyyyMMdd}.{HH}/{runId|manual}/{文件名}`（与 openlibing-upload-sarif 的 `{toolName}-results` 共用同一路径结构，仅前缀不同）
 - **上传/回调失败仅告警**，不阻断检查结果；回调会校验 HTTP 状态 + 响应体业务码（后端业务错误恒为 HTTP 200，只看状态会误报成功）
 
 ## 使用示例

@@ -419,38 +419,92 @@ async function uploadScanReports(preCommitOutput) {
   }
 
   const reportDir = getInput('report-dir') || REPORT_DIR_DEFAULT;
+  const workspace = process.env.WORKSPACE || process.cwd();
 
-  // 用户提供的报告：报告目录下已有的 *.sarif（业务仓转换好的，直接使用）
-  const sarifFiles = [];
+  // 用户提供的报告（绝对路径列表）：
+  //   1) sarif-file 输入：逗号分隔的文件/目录（目录非递归扫描 *.sarif），与 openlibing-upload-sarif 一致
+  //   2) report-dir 目录扫描：向后兼容既有行为
+  const candidatePaths = [];
+  const sarifFileInput = getInput('sarif-file');
+  if (sarifFileInput) {
+    sarifFileInput.split(',').map(s => s.trim()).filter(Boolean).forEach(p => candidatePaths.push(p));
+  }
   if (fs.existsSync(reportDir)) {
     fs.readdirSync(reportDir)
       .filter(f => f.endsWith('.sarif'))
       .sort()
-      .forEach(f => sarifFiles.push(f));
+      .forEach(f => candidatePaths.push(path.join(reportDir, f)));
   } else {
     console.log(`[INFO] 报告目录不存在，尝试从 pre-commit 日志兜底生成: ${reportDir}`);
   }
 
+  const userSarifFiles = [];
+  const missingPaths = [];
+  for (const rawPath of candidatePaths) {
+    let p = rawPath;
+    if (!fs.existsSync(p)) {
+      const joined = path.join(workspace, rawPath);
+      if (fs.existsSync(joined)) p = joined;
+    }
+    if (!fs.existsSync(p)) {
+      missingPaths.push(rawPath);
+      continue;
+    }
+    if (fs.statSync(p).isDirectory()) {
+      console.log(`[INFO] 输入为目录: ${p}，扫描其中所有 .sarif 文件`);
+      const found = fs.readdirSync(p)
+        .filter(f => f.toLowerCase().endsWith('.sarif'))
+        .map(f => path.join(p, f));
+      if (found.length === 0) console.log(`[WARN] 目录中未找到 .sarif 文件: ${p}`);
+      userSarifFiles.push(...found);
+    } else {
+      userSarifFiles.push(p);
+    }
+  }
+  // 去重（同名文件保留首个）
+  const seen = new Set();
+  const userSarifFilesDedup = userSarifFiles.filter(f => {
+    const key = path.basename(f);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  userSarifFiles.length = 0;
+  userSarifFiles.push(...userSarifFilesDedup);
+  if (missingPaths.length > 0) {
+    // 报告属附加能力，路径缺失不阻断 pre-commit 检查主流程，仅告警
+    console.log(`[WARN] SARIF 路径不存在（已忽略）: ${missingPaths.join(', ')}`);
+  }
+
   // 按工具维度补齐：失败钩子对应工具已有用户 sarif 直接用；
   // 未提供且支持日志解析则生成 <tool>.sarif；未提供且不支持则提示。
-  const fallbackFiles = generateFallbackSarif(preCommitOutput, sarifFiles);
+  const existingNames = userSarifFiles.map(f => path.basename(f));
+  const fallbackFiles = generateFallbackSarif(preCommitOutput, existingNames);
   if (fallbackFiles.length > 0) {
-    fallbackFiles.forEach(f => sarifFiles.push(f));
     console.log('[INFO] 已根据 pre-commit 日志生成兜底 SARIF: ' + fallbackFiles.join(', '));
   }
 
-  if (sarifFiles.length === 0) {
+  // 上传列表 = 用户提供的报告（绝对路径） + 兜底生成的文件（report-dir 下）
+  const uploadFiles = userSarifFiles.map(f => ({ file: f, name: path.basename(f) }));
+  for (const name of fallbackFiles) {
+    uploadFiles.push({ file: path.join(reportDir, name), name });
+  }
+
+  if (uploadFiles.length === 0) {
     console.log(`[INFO] 无 SARIF 报告可上传（失败钩子工具均未提供 sarif 且不支持日志解析），跳过报告上传: ${reportDir}`);
     return;
   }
 
-  console.log(`[OK] 发现 ${sarifFiles.length} 个 SARIF 报告:`);
-  sarifFiles.forEach(f => console.log(`  - ${f}`));
+  console.log(`[OK] 发现 ${uploadFiles.length} 个 SARIF 报告:`);
+  uploadFiles.forEach(u => console.log(`  - ${u.file}`));
 
   const workflowRunId = process.env.ATOMGIT_RUN_ID || process.env.PIPELINE_RUN_ID || '';
   const repoName = process.env.ATOMGIT_REPOSITORY || '';
   const repoBaseName = repoName.split('/').pop() || 'unknown-repo';
-  const objectKeyPrefix = `${OBS_KEY_PREFIX}/${repoBaseName}/${workflowRunId || 'manual'}`;
+  const now = new Date();
+  const dateStr = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}.${String(now.getHours()).padStart(2, '0')}`;
+  // 统一路径结构：{前缀}/{仓库名}/{yyyyMMdd}.{HH}/{runId|manual}/{文件名}
+  const objectKeyPrefix = `${OBS_KEY_PREFIX}/${repoBaseName}/${dateStr}/${workflowRunId || 'manual'}`;
 
   const debugEnabled = getInput('debug') === 'true';
   const { region } = configure({ debug: debugEnabled });
@@ -471,21 +525,21 @@ async function uploadScanReports(preCommitOutput) {
 
   const sarifUrls = [];
   try {
-    for (const sf of sarifFiles) {
-      const objectKey = `${objectKeyPrefix}/${sf}`;
+    for (const u of uploadFiles) {
+      const objectKey = `${objectKeyPrefix}/${u.name}`;
       console.log(`[INFO] 上传 ${objectKey}`);
       // ACL: 'public-read'：后端 SarifParseServiceImpl 通过匿名 HTTP GET 下载，对象必须公共读
       await withRetryAsync(() => client.putObject({
         Bucket: OBS_BUCKET,
         Key: objectKey,
-        SourceFile: path.join(reportDir, sf),
+        SourceFile: u.file,
         ACL: 'public-read'
       }).then((result) => {
         const msg = (result && result.CommonMsg) || {};
         if (!(msg.Status >= 200 && msg.Status < 300)) {
           throw new Error(`OBS upload failed (${msg.Status})${msg.Code ? ' [' + msg.Code + ']' : ''}: ${msg.Message || '未知错误'}`);
         }
-      }), { label: `${sf} 上传` });
+      }), { label: `${u.name} 上传` });
       const sarifUrl = `${OBS_READ_ENDPOINT}/${objectKey}`;
       sarifUrls.push(sarifUrl);
       console.log(`[OK] 上传成功: ${sarifUrl}`);

@@ -40,6 +40,18 @@ inputs:
         disabled_conditions: []
       validation:
         required_message: ""
+  sarif-file:
+    description: "SARIF 文件/目录路径，逗号分隔支持多值（与 openlibing-upload-sarif 的 sarif_file 一致）：单个文件、多个文件、单个目录、多个目录（目录自动扫描其中所有 .sarif 文件，非递归）。填写后优先于 report-dir 目录扫描；未填写时回退扫描 report-dir 目录下 *.sarif"
+    required: false
+    default: ""
+    layout:
+      type: "input"
+      label: "SARIF 文件/目录"
+      extend_prop:
+        visible_conditions: []
+        disabled_conditions: []
+      validation:
+        required_message: ""
   env-type:
     description: "回调环境类型：prod（正式环境 apig.openlibing.com）或 beta（测试环境华为云 APIG 实例域名）"
     required: false
