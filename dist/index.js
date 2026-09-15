@@ -24,7 +24,7 @@ const PIP_TIMEOUT = '120';
 // 报告扫描上传相关常量
 const REPORT_DIR_DEFAULT = '/tmp/pre-commit-reports/'; // 各工具扫描报告约定目录（机器临时目录）
 const OBS_BUCKET = 'openlibing-gitcode-action'; // openlibing 账号固定 OBS 桶（公网匿名可读）
-const OBS_KEY_PREFIX = 'pre-commit-reports'; // 与 CodeArts 结果前缀 code-arts-check-results 区分
+const OBS_KEY_PREFIX = 'pre-commit-results'; // 所有工具集成在一个 pre-commit，统一固定此前缀（与 CodeArts 结果前缀 code-arts-check-results 区分）
 const OBS_READ_ENDPOINT = 'https://openlibing-gitcode-action.obs.cn-southwest-2.myhuaweicloud.com';
 // APIG 回调地址必须使用 /action-api 前缀（网关 IAM 认证，V11 签名 + X-Security-Token）。
 // 注意：/openlibing-codecheck 前缀是 APP 认证分组（upload-sarif 用 AppKey/AppSecret HMAC），
@@ -395,6 +395,24 @@ function resolveBranch() {
     : (process.env.ATOMGIT_REF_NAME || '');
 }
 
+/** 异步指数退避重试：默认 3 次，失败后 sleep(2^(n-1) * 1000ms) 再试。
+ * 用于 OBS 上传 / APIG 回调等异步请求，降低网络抖动导致的数据丢失风险。 */
+async function withRetryAsync(fn, { retries = 3, label = '' } = {}) {
+  let lastErr;
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (attempt === retries) break;
+      const delayMs = Math.pow(2, attempt - 1) * 1000;
+      console.log(`[WARN] ${label} 第 ${attempt} 次失败（${err.message}），${delayMs}ms 后重试（${attempt + 1}/${retries}）`);
+      await new Promise(r => setTimeout(r, delayMs));
+    }
+  }
+  throw lastErr;
+}
+
 /** 扫描报告上传：SARIF 报告 → OBS → APIG 回调。优先上传业务仓转换好的 *.sarif（用户提供的报告）；
  * 若报告目录无 *.sarif，则解析 pre-commit 运行日志生成兜底 SARIF（防止用户未提供报告的场景）。
  * PR 类型触发跳过。@param {string} preCommitOutput pre_commit run 的捕获输出（stdout+stderr） */
@@ -463,11 +481,17 @@ async function uploadScanReports(preCommitOutput) {
       const objectKey = `${objectKeyPrefix}/${sf}`;
       console.log(`[INFO] 上传 ${objectKey}`);
       // ACL: 'public-read'：后端 SarifParseServiceImpl 通过匿名 HTTP GET 下载，对象必须公共读
-      const result = await client.putObject({ Bucket: OBS_BUCKET, Key: objectKey, SourceFile: path.join(reportDir, sf), ACL: 'public-read' });
-      const msg = (result && result.CommonMsg) || {};
-      if (!(msg.Status >= 200 && msg.Status < 300)) {
-        throw new Error(`OBS upload failed (${msg.Status})${msg.Code ? ' [' + msg.Code + ']' : ''}: ${msg.Message || '未知错误'}`);
-      }
+      await withRetryAsync(() => client.putObject({
+        Bucket: OBS_BUCKET,
+        Key: objectKey,
+        SourceFile: path.join(reportDir, sf),
+        ACL: 'public-read'
+      }).then((result) => {
+        const msg = (result && result.CommonMsg) || {};
+        if (!(msg.Status >= 200 && msg.Status < 300)) {
+          throw new Error(`OBS upload failed (${msg.Status})${msg.Code ? ' [' + msg.Code + ']' : ''}: ${msg.Message || '未知错误'}`);
+        }
+      }), { label: `${sf} 上传` });
       const sarifUrl = `${OBS_READ_ENDPOINT}/${objectKey}`;
       sarifUrls.push(sarifUrl);
       console.log(`[OK] 上传成功: ${sarifUrl}`);
@@ -605,7 +629,7 @@ if (require.main === require.cache[eval('__filename')]) {
   });
 }
 
-module.exports = { run, parsePreCommitLog, generateFallbackSarif, enrichRegionSnippet, _locationHash };
+module.exports = { run, parsePreCommitLog, generateFallbackSarif, enrichRegionSnippet, _locationHash, withRetryAsync };
 
 
 /***/ }),
