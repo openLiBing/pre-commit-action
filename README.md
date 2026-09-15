@@ -16,13 +16,13 @@ PR 增量检查流程：
 
 ## 输入参数
 
-| 参数       | 说明                                                                                           | 必填 | 默认值         |
-| ---------- | ---------------------------------------------------------------------------------------------- | ---- | -------------- |
-| extra_args | pre-commit 运行参数。为空时自动判断：PR 事件检查增量文件，非 PR 检查全量；填写时按指定参数执行 | 否   | 空（自动判断） |
-| report-dir | SARIF 报告约定目录（机器临时目录，非代码仓目录）。SARIF 转换由业务仓负责（detect-secrets/gitleaks JSON 在业务仓 workflow 中转成 `*.sarif` 写入该目录），插件读取该目录下 `*.sarif` 上传 OBS 并回调 openlibing 后端。PR 类型触发不进行报告上传回调 | 否   | /tmp/pre-commit-reports/ |
-| sarif-file | SARIF 文件/目录路径，逗号分隔支持多值（与 openlibing-upload-sarif 的 `sarif_file` 一致）：单个文件、多个文件、单个目录、多个目录（目录自动扫描其中所有 `.sarif` 文件，非递归）。填写后优先于 `report-dir` 目录扫描；未填写时回退扫描 `report-dir` 目录下 `*.sarif` | 否   | 空（回退 report-dir） |
-| env-type   | 回调环境类型：prod（正式环境 apig.openlibing.com）或 beta（测试环境华为云 APIG 实例域名） | 否   | prod          |
-| debug      | 开启 SDK 调试定位日志（请求/响应详情，敏感字段自动脱敏）                                        | 否   | false          |
+| 参数       | 说明                                                                                                                                                                                                                                                               | 必填 | 默认值                   |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---- | ------------------------ |
+| extra_args | pre-commit 运行参数。为空时自动判断：PR 事件检查增量文件，非 PR 检查全量；填写时按指定参数执行                                                                                                                                                                     | 否   | 空（自动判断）           |
+| report-dir | SARIF 报告约定目录（机器临时目录，非代码仓目录）。SARIF 转换由业务仓负责（detect-secrets/gitleaks JSON 在业务仓 workflow 中转成 `*.sarif` 写入该目录），插件读取该目录下 `*.sarif` 上传 OBS 并回调 openlibing 后端。PR 类型触发不进行报告上传回调                  | 否   | /tmp/pre-commit-reports/ |
+| sarif-file | SARIF 文件/目录路径，逗号分隔支持多值（与 openlibing-upload-sarif 的 `sarif_file` 一致）：单个文件、多个文件、单个目录、多个目录（目录自动扫描其中所有 `.sarif` 文件，非递归）。填写后优先于 `report-dir` 目录扫描；未填写时回退扫描 `report-dir` 目录下 `*.sarif` | 否   | 空（回退 report-dir）    |
+| env-type   | 回调环境类型：prod（正式环境 apig.openlibing.com）或 beta（测试环境华为云 APIG 实例域名）                                                                                                                                                                          | 否   | prod                     |
+| debug      | 开启 SDK 调试定位日志（请求/响应详情，敏感字段自动脱敏）                                                                                                                                                                                                           | 否   | false                    |
 
 > **报告上传约定**：SARIF 转换由业务仓负责——detect-secrets 钩子生成 `detect-secrets.json` 后，业务仓 workflow 调用自己的转换脚本（如 `scripts/convert-detect-secrets-to-sarif.py`）输出 `detect-secrets.sarif` 到约定目录 `/tmp/pre-commit-reports/`；gitleaks 同理生成 `gitleaks.sarif`。插件只读取该目录下的 `*.sarif` 上传 OBS 并回调。PR 类型触发（mr / pull_request / note）不做报告扫描上传回调。
 
@@ -64,7 +64,7 @@ permissions:
       entry: bash scripts/detect-secrets-report.sh # 扫描生成 JSON + 调用转换脚本输出 SARIF + baseline 拦截
       language: system
       require_serial: true
-      types: [ text ]
+      types: [text]
 ```
 
 ```yaml
@@ -76,7 +76,7 @@ permissions:
   id-token: write # OIDC 免密换证必需
 jobs:
   pre-commit-report:
-    runs-on: ['codearts-hosted', 'ubuntu-latest', 'x64', 'slim']
+    runs-on: ["codearts-hosted", "ubuntu-latest", "x64", "slim"]
     steps:
       - name: Checkout repository
         uses: checkout
@@ -92,13 +92,13 @@ jobs:
         with:
           report-dir: /tmp/pre-commit-reports/
           env-type: beta # prod 正式环境 apig.openlibing.com / beta 华为云 APIG 实例域名
-          debug: 'false'
+          debug: "false"
 ```
 
 ### 行为说明
 
-- **PR 类型触发**（mr / pull_request / note）只做检查，不进行报告上传回调
-- **检查失败仍上传**：pre-commit 失败时已生成的报告仍会上传，随后按失败标志退出
+- **PR 类型触发**（mr / pull_request / note）只做检查，不进行报告上传回调；**检查失败按门禁退出**（`exit(1)`），阻塞合并
+- **检查失败仍上传**：pre-commit 失败时已生成的报告仍会上传。**版本级触发**（push / workflow_dispatch / schedule）检查发现告警仅告警提示，**不按失败退出**；仅 PR 门禁场景按失败退出
 - **数据源优先级**：① 输入 `sarif-file` 指定的文件/目录（支持逗号多值）；② 报告目录 `report-dir` 下已有的 `*.sarif`；③ 均无且日志有失败钩子时走兜底能力。同一工具已提供报告则直接使用，不再日志解析
 - **兜底能力**：按工具维度处理失败钩子的报告。每个失败钩子：① 用户已提供该工具的 `*.sarif` → 直接使用；② 未提供且工具在支持解析列表（第一批：**clang-tidy / bandit / gosec / spotbugs / rust-clippy / eslint / gitleaks / detect-secrets**）→ 解析日志出具体问题（文件/行/列/规则/级别）生成 `<tool>.sarif`；③ 未提供且不支持 → 不生成报告，仅提示"`<工具> 未查询到 sarif 文件，且暂不支持日志自动解析"。日志无失败钩子则跳过上传
 - **OBS 路径结构**：`pre-commit-results/{仓库名}/{yyyyMMdd}.{HH}/{runId|manual}/{文件名}`（与 openlibing-upload-sarif 的 `{toolName}-results` 共用同一路径结构，仅前缀不同）

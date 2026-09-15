@@ -683,8 +683,15 @@ console.log('\n===== [1] 检查 Python 环境 =====');
   await uploadScanReports(preCommitResult.output);
 
   if (preCommitResult.failed) {
-    console.log('[ERROR] pre-commit 检查失败，扫描报告已上传，任务按失败状态退出');
-    process.exit(1);
+    if (isPrEvent()) {
+      // 门禁场景（PR 增量检查）：检查失败必须退出，阻塞合并
+      console.log('[ERROR] pre-commit 检查失败（门禁），任务按失败状态退出');
+      process.exit(1);
+    } else {
+      // 版本级场景（push / workflow_dispatch / schedule 全量检查）：
+      // 报告已上传归档，检查发现告警仅告警提示，不按失败退出
+      console.log('[WARN] pre-commit 检查发现告警（版本级），扫描报告已上传，任务不按失败状态退出');
+    }
   }
 }
 
