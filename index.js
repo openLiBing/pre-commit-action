@@ -2,8 +2,6 @@ const { execSync, execFileSync, spawnSync } = require('child_process');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-const ObsClient = require('esdk-obs-nodejs');
-const { callApig, configure, getCredentials } = require('@openlibing/huaweicloud-oidc-client');
 const { buildToolSarif, matchToolParser } = require('./tool-parsers');
 
 const PIP_MIRROR_DEFAULT = 'https://mirrors.huaweicloud.com/repository/pypi/simple';
@@ -15,17 +13,8 @@ let PIP_MIRROR = '';
 let GO_PROXY = '';
 const PIP_TIMEOUT = '120';
 
-// 报告扫描上传相关常量
+// 报告生成相关常量
 const REPORT_DIR_DEFAULT = '/tmp/pre-commit-reports/'; // 各工具扫描报告约定目录（机器临时目录）
-const OBS_BUCKET = 'openlibing-gitcode-action'; // openlibing 账号固定 OBS 桶（公网匿名可读）
-const OBS_KEY_PREFIX = 'pre-commit-results'; // 所有工具集成在一个 pre-commit，统一固定此前缀（与 CodeArts 结果前缀 code-arts-check-results 区分）
-const OBS_READ_ENDPOINT = 'https://openlibing-gitcode-action.obs.cn-southwest-2.myhuaweicloud.com';
-// APIG 回调地址必须使用 /action-api 前缀（网关 IAM 认证，V11 签名 + X-Security-Token）。
-// 注意：/openlibing-codecheck 前缀是 APP 认证分组（upload-sarif 用 AppKey/AppSecret HMAC），
-// 对 V11 IAM 签名返回 401，不得混用。与 openlibing-spotbugs-action / openlibing-codecheck-to-sarif 保持一致。
-const APIG_CALLBACK_URL = 'https://apig.openlibing.com/action-api/codescan/v1/result/receive';
-const APIG_CALLBACK_URL_BETA = 'https://174e1b821a8446f38998a67186ba766e.apic.cn-southwest-2.huaweicloudapis.com/action-api/codescan/v1/result/receive';
-const APIG_CALLBACK_CATEGORY = 'pre-commit';
 
 function getInput(name) {
   // 兼容连字符与下划线两种命名：report-dir 同时支持 INPUT_REPORT-DIR / INPUT_REPORT_DIR
@@ -56,6 +45,29 @@ function getInput(name) {
   }
 
   return trimmed;
+}
+
+/** 输出 action output（GitCode STEP_OUTPUT 机制，与 openlibing-upload-sarif 一致） */
+function setOutput(key, value) {
+  const stepOutput = process.env.STEP_OUTPUT;
+  if (!stepOutput) {
+    console.log(`[WARN] STEP_OUTPUT env not set, skip output: ${key}=${value}`);
+    return;
+  }
+  let filePath;
+  try {
+    filePath = fs.statSync(stepOutput).isDirectory() ? path.join(stepOutput, 'output') : stepOutput;
+  } catch (e) {
+    // 文件不存在但父目录有效时按文件路径追加（appendFileSync 自动创建）
+    const parentDir = path.dirname(stepOutput);
+    if (!(fs.existsSync(parentDir) && fs.statSync(parentDir).isDirectory())) {
+      console.log(`[WARN] STEP_OUTPUT path is invalid, skip output: ${key}=${value}`);
+      return;
+    }
+    filePath = stepOutput;
+  }
+  fs.appendFileSync(filePath, `${key}=${value}\n`, 'utf-8');
+  console.log(`[OUTPUT] ${key}=${value}`);
 }
 
 function exec(cmd) {
@@ -498,50 +510,27 @@ function generateFallbackSarif(preCommitOutput, existingSarifNames) {
   return generated;
 }
 
-/** 是否为 PR 类型触发（PR 触发不进行报告扫描上传回调）。与 buildAutoArgs 的 PR 判断保持一致。 */
+/** 是否为 PR 类型触发（门禁场景：pre-commit 检查失败必须退出阻塞合并）。
+ * 与 buildAutoArgs 的 PR 判断保持一致。 */
 function isPrEvent() {
   const eventName = (process.env.ATOMGIT_EVENT_NAME || '').toLowerCase();
   const baseRef = process.env.ATOMGIT_BASE_REF || '';
   return (eventName === 'mr' || eventName === 'pull_request' || eventName === 'note') && baseRef;
 }
 
-/** 回调分支：MR 事件用目标分支（ATOMGIT_HEAD_REF），其他事件用当前 ref（ATOMGIT_REF_NAME）。
- * 与 openlibing-spotbugs-action 的 resolveBranch 保持一致，避免 workflow_dispatch 等非 MR
- * 事件下 ATOMGIT_HEAD_REF 为空导致后端校验失败（分支名不能为空）。 */
-function resolveBranch() {
-  const eventName = (process.env.ATOMGIT_EVENT_NAME || '').toLowerCase();
-  return eventName === 'mr'
-    ? (process.env.ATOMGIT_HEAD_REF || '')
-    : (process.env.ATOMGIT_REF_NAME || '');
-}
-
-/** 异步指数退避重试：默认 3 次，失败后 sleep(2^(n-1) * 1000ms) 再试。
- * 用于 OBS 上传 / APIG 回调等异步请求，降低网络抖动导致的数据丢失风险。 */
-async function withRetryAsync(fn, { retries = 3, label = '' } = {}) {
-  let lastErr;
-  for (let attempt = 1; attempt <= retries; attempt++) {
-    try {
-      return await fn();
-    } catch (err) {
-      lastErr = err;
-      if (attempt === retries) break;
-      const delayMs = Math.pow(2, attempt - 1) * 1000;
-      console.log(`[WARN] ${label} 第 ${attempt} 次失败（${err.message}），${delayMs}ms 后重试（${attempt + 1}/${retries}）`);
-      await new Promise(r => setTimeout(r, delayMs));
-    }
-  }
-  throw lastErr;
-}
-
-/** 扫描报告上传：SARIF 报告 → OBS → APIG 回调。优先上传业务仓转换好的 *.sarif（用户提供的报告）；
+/** 收集 SARIF 报告：优先收集业务仓转换好的 *.sarif（用户通过 sarif-file / report-dir 提供）；
  * 若报告目录无 *.sarif，则解析 pre-commit 运行日志生成兜底 SARIF（防止用户未提供报告的场景）。
- * PR 类型触发跳过。@param {string} preCommitOutput pre_commit run 的捕获输出（stdout+stderr） */
-async function uploadScanReports(preCommitOutput) {
-  console.log('\n===== [7] 报告扫描上传（SARIF 报告 → OBS → APIG 回调） =====');
+ * 只负责生成/归一化报告文件，不做上传回调——上传由 workflow 中 openlibing-upload-sarif 完成。
+ * PR 类型触发（mr / pull_request / note）只做门禁检查，不生成/收集报告。
+ * @param {string} preCommitOutput pre_commit run 的捕获输出（stdout+stderr）
+ * @returns {string[]} 收集到的 SARIF 文件绝对路径数组（可能为空） */
+function collectScanReports(preCommitOutput) {
+  console.log('\n===== [7] 报告收集与兜底生成（上传交由 workflow 中的 openlibing-upload-sarif） =====');
 
+  // PR 场景只做门禁检查，不生成报告（门禁失败退出逻辑在 run() 中处理）
   if (isPrEvent()) {
-    console.log('[INFO] PR 类型触发，按约定不进行报告扫描上传回调，跳过');
-    return;
+    console.log('[INFO] PR 类型触发，按约定不生成/收集 SARIF 报告，跳过');
+    return [];
   }
 
   const reportDir = getInput('report-dir') || REPORT_DIR_DEFAULT;
@@ -617,8 +606,8 @@ async function uploadScanReports(preCommitOutput) {
   }
 
   if (uploadFiles.length === 0) {
-    console.log(`[INFO] 无 SARIF 报告可上传（失败钩子工具均未提供 sarif 且不支持日志解析），跳过报告上传: ${reportDir}`);
-    return;
+    console.log(`[INFO] 无 SARIF 报告可生成（失败钩子工具均未提供 sarif 且不支持日志解析）: ${reportDir}`);
+    return [];
   }
 
   // 上传前 uri 归一化（兜底文件生成时已归一化，此处幂等、无二次变更）：
@@ -629,97 +618,12 @@ async function uploadScanReports(preCommitOutput) {
     console.log(`[INFO] 已归一化 ${normalizedCount} 个 SARIF 文件的 uri（机器绝对路径 -> 相对仓库根）`);
   }
 
-  console.log(`[OK] 发现 ${uploadFiles.length} 个 SARIF 报告:`);
+  console.log(`[OK] 收集到 ${uploadFiles.length} 个 SARIF 报告:`);
   uploadFiles.forEach(u => console.log(`  - ${u.file}`));
 
-  const workflowRunId = process.env.ATOMGIT_RUN_ID || process.env.PIPELINE_RUN_ID || '';
-  const repoName = process.env.ATOMGIT_REPOSITORY || '';
-  const repoBaseName = repoName.split('/').pop() || 'unknown-repo';
-  const now = new Date();
-  const dateStr = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}.${String(now.getHours()).padStart(2, '0')}`;
-  // 统一路径结构：{前缀}/{仓库名}/{yyyyMMdd}.{HH}/{runId|manual}/{文件名}
-  const objectKeyPrefix = `${OBS_KEY_PREFIX}/${repoBaseName}/${dateStr}/${workflowRunId || 'manual'}`;
-
-  const debugEnabled = getInput('debug') === 'true';
-  const { region } = configure({ debug: debugEnabled });
-
-  console.log(`\n===== [8] OIDC 换证并上传 OBS（${OBS_BUCKET}/${objectKeyPrefix}/） =====`);
-  const cred = await getCredentials();
-  const server = `https://obs.${region}.myhuaweicloud.com`;
-  const client = new ObsClient({
-    access_key_id: cred.accessKeyId,
-    secret_access_key: cred.secretAccessKey,
-    security_token: cred.securityToken,
-    server
-  });
-  // esdk-obs-nodejs 的 initFactory 为 fire-and-forget（内部 await refresh 后才设置签名上下文），
-  // 构造后立即 putObject 会读到 null signatureContext（Cannot read properties of null (reading 'signature')），
-  // 此处让出一个微任务等待初始化完成。
-  await Promise.resolve();
-
-  const sarifUrls = [];
-  try {
-    for (const u of uploadFiles) {
-      const objectKey = `${objectKeyPrefix}/${u.name}`;
-      console.log(`[INFO] 上传 ${objectKey}`);
-      // ACL: 'public-read'：后端 SarifParseServiceImpl 通过匿名 HTTP GET 下载，对象必须公共读
-      await withRetryAsync(() => client.putObject({
-        Bucket: OBS_BUCKET,
-        Key: objectKey,
-        SourceFile: u.file,
-        ACL: 'public-read'
-      }).then((result) => {
-        const msg = (result && result.CommonMsg) || {};
-        if (!(msg.Status >= 200 && msg.Status < 300)) {
-          throw new Error(`OBS upload failed (${msg.Status})${msg.Code ? ' [' + msg.Code + ']' : ''}: ${msg.Message || '未知错误'}`);
-        }
-      }), { label: `${u.name} 上传` });
-      const sarifUrl = `${OBS_READ_ENDPOINT}/${objectKey}`;
-      sarifUrls.push(sarifUrl);
-      console.log(`[OK] 上传成功: ${sarifUrl}`);
-    }
-  } finally {
-    await client.close();
-  }
-
-  console.log('\n===== [9] APIG 回调 openlibing 后端 =====');
-  // 根据 env-type input 显式选择回调地址（prod 走正式域名，beta 走华为云 APIG 实例域名）
-  const isBetaEnv = (getInput('env-type') || 'prod').toLowerCase() === 'beta';
-  const finalCallbackUrl = isBetaEnv ? APIG_CALLBACK_URL_BETA : APIG_CALLBACK_URL;
-  console.log(`[INFO] 环境类型: ${isBetaEnv ? 'beta (测试环境)' : 'prod (正式环境)'}`);
-  const callbackPayload = {
-    repoUrl: process.env.ATOMGIT_REPOSITORY_URL || '',
-    pipelineId: process.env.ATOMGIT_PIPELINE_ID || '',
-    pipelineName: process.env.PIPELINE_NAME || '',
-    pipelineRunId: workflowRunId || '',
-    branch: resolveBranch(),
-    commitId: process.env.ATOMGIT_SHA || '',
-    obsUrl: sarifUrls, // 后端 DTO 为 List<String>，必须传数组
-    category: APIG_CALLBACK_CATEGORY,
-    source: 'GITCODE_ACTION',
-    sourceRunUrl: ''
-  };
-  try {
-    const res = await callApig('POST', finalCallbackUrl, null, JSON.stringify(callbackPayload));
-    console.log(`[INFO] 回调响应: HTTP ${res.status}`);
-    const data = res.data;
-    // 后端 GlobalExceptionHandler 对校验失败返回 HTTP 200 + DataResult{code:4010103}，
-    // 业务失败需检查响应体 code 字段（200/0 视为成功），不能只看 HTTP 状态码
-    const isBizOk = data && typeof data === 'object' && !('raw' in data) && (data.code === 200 || data.code === 0);
-    if (res.status >= 200 && res.status < 300 && isBizOk) {
-      console.log('[OK] APIG 回调发送成功');
-    } else {
-      const bizCode = data && typeof data === 'object' ? data.code : undefined;
-      const respText = data && typeof data === 'object' && 'raw' in data
-        ? data.raw
-        : JSON.stringify(data || {});
-      console.log(`[WARN] APIG 回调未成功：HTTP ${res.status}${bizCode !== undefined ? `，业务码 ${bizCode}` : ''}，响应: ${respText}`);
-    }
-    const resultViewUrl = isBetaEnv ? 'https://beta.openlibing.com/apps/codeCheck' : 'https://www.openlibing.com/apps/codeCheck';
-    console.log(`[INFO] 查看上传结果解析: ${resultViewUrl}`);
-  } catch (cbErr) {
-    console.log(`[WARN] APIG 回调发送失败: ${cbErr.message}（OBS 上传已成功，不影响最终结果）`);
-  }
+  // 返回文件绝对路径列表，供 run() 输出到 sarif-files output，
+  // workflow 中 openlibing-upload-sarif 的 sarif-file input 可直接消费。
+  return uploadFiles.map(u => u.file);
 }
 
 async function run() {
@@ -810,7 +714,12 @@ console.log('\n===== [1] 检查 Python 环境 =====');
   console.log('\n===== [6] 运行 pre-commit 检查 =====');
   const preCommitResult = runPreCommit(cmdResult);
 
-  await uploadScanReports(preCommitResult.output);
+  // 收集/兜底生成 SARIF 报告文件（不做上传回调，上传由 workflow 中的 openlibing-upload-sarif 完成）
+  const sarifFiles = collectScanReports(preCommitResult.output);
+  if (sarifFiles.length > 0) {
+    // 输出到 sarif-files，workflow 中 openlibing-upload-sarif 的 sarif-file input 可直接消费
+    setOutput('sarif-files', sarifFiles.join(','));
+  }
 
   if (preCommitResult.failed) {
     if (isPrEvent()) {
@@ -819,8 +728,8 @@ console.log('\n===== [1] 检查 Python 环境 =====');
       process.exit(1);
     } else {
       // 版本级场景（push / workflow_dispatch / schedule 全量检查）：
-      // 报告已上传归档，检查发现告警仅告警提示，不按失败退出
-      console.log('[WARN] pre-commit 检查发现告警（版本级），扫描报告已上传，任务不按失败状态退出');
+      // 报告文件已生成（sarif-files output），上传与解析由 workflow 负责，检查发现告警仅提示，不按失败退出
+      console.log('[WARN] pre-commit 检查发现告警（版本级），扫描报告已生成，任务不按失败状态退出');
     }
   }
 }
@@ -835,6 +744,7 @@ if (require.main === module) {
 
 module.exports = {
   run,
+  collectScanReports,
   parsePreCommitLog,
   generateFallbackSarif,
   enrichRegionSnippet,
@@ -842,6 +752,5 @@ module.exports = {
   resolveRepoRoot,
   toRepoRelative,
   normalizeSarifUris,
-  normalizeSarifFiles,
-  withRetryAsync
+  normalizeSarifFiles
 };

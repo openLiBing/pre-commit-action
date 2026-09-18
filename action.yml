@@ -1,5 +1,5 @@
 name: "pre-commit-action"
-version: 1.0.35
+version: 1.0.37
 author: "test-devops"
 description: "安装 pre-commit 并对代码仓库执行钩子检查"
 
@@ -29,7 +29,7 @@ inputs:
       validation:
         required_message: ""
   report-dir:
-    description: "SARIF 报告约定目录（机器临时目录，非代码仓目录）。SARIF 转换由业务仓负责（detect-secrets/gitleaks JSON 在业务仓 workflow 中转成 *.sarif 写入该目录），插件读取该目录下 *.sarif 上传 OBS 并回调 openlibing 后端。PR 类型触发不进行报告上传回调"
+    description: "SARIF 报告约定目录（机器临时目录，非代码仓目录）。插件扫描该目录下 *.sarif 作为用户提供的报告；工具未提供时按支持列表解析 pre-commit 日志兜底生成 <tool>.sarif 到该目录。只生成报告文件，上传由 workflow 中 openlibing-upload-sarif 完成"
     required: false
     default: "/tmp/pre-commit-reports/"
     layout:
@@ -52,36 +52,14 @@ inputs:
         disabled_conditions: []
       validation:
         required_message: ""
-  env-type:
-    description: "回调环境类型：prod（正式环境 apig.openlibing.com）或 beta（测试环境华为云 APIG 实例域名）"
-    required: false
-    default: "prod"
-    layout:
-      type: "input"
-      label: "回调环境"
-      extend_prop:
-        visible_conditions: []
-        disabled_conditions: []
-      validation:
-        required_message: ""
-  debug:
-    description: "开启 SDK 调试定位日志（请求/响应详情，敏感字段自动脱敏）"
-    required: false
-    default: "false"
-    layout:
-      type: "input"
-      label: "调试模式"
-      extend_prop:
-        visible_conditions: []
-        disabled_conditions: []
-      validation:
-        required_message: ""
 
 outputs:
   result:
     description: "pre-commit 运行结果：success 或 failed"
   checked_files:
     description: "pre-commit 检查的文件范围"
+  sarif-files:
+    description: "收集/兜底生成的 SARIF 文件绝对路径列表（逗号分隔，可空）。可直接传给 openlibing-upload-sarif 的 sarif-file input 完成上传"
 
 runs:
   using: "node16"
