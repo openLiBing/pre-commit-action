@@ -306,10 +306,13 @@ function parsePreCommitLog(output) {
 
 /** 为 SARIF results 补充 region.snippet（实际代码行内容），提升后端告警可读性。
  * 截取「问题行上下各 2 行」的上下文窗口，而非仅问题行本身，便于后端展示定位上下文。
- * 文件路径为相对仓库根的路径（pre-commit 在仓库根运行）；读取失败静默跳过，不阻断报告生成。 */
+ * 已有 snippet 会被覆盖为标准窗口（如 gitleaks 自带的单行 snippet）；文本一致视为幂等，不计数。
+ * 文件路径为相对仓库根的路径（pre-commit 在仓库根运行）；读取失败静默跳过，不阻断报告生成。
+ * @returns {number} 本次实际新补充/变更 snippet 的 result 数量 */
 function enrichRegionSnippet(sarifObj) {
   const results = sarifObj && sarifObj.runs && sarifObj.runs[0] && sarifObj.runs[0].results;
-  if (!results) return;
+  if (!results) return 0;
+  let enriched = 0;
   for (const r of results) {
     const loc = r.locations && r.locations[0] && r.locations[0].physicalLocation;
     if (!loc || !loc.artifactLocation || !loc.artifactLocation.uri || !loc.region || !loc.region.startLine) continue;
@@ -323,10 +326,14 @@ function enrichRegionSnippet(sarifObj) {
     const from = Math.max(0, loc.region.startLine - 3);
     const to = Math.min(lines.length, loc.region.startLine + 2);
     const snippetLines = lines.slice(from, to);
-    if (snippetLines.length > 0) {
-      loc.region.snippet = { text: snippetLines.join('\n') };
-    }
+    if (snippetLines.length === 0) continue;
+    const text = snippetLines.join('\n');
+    // 幂等：snippet 已是标准窗口内容则不重复计数
+    if (loc.region.snippet && loc.region.snippet.text === text) continue;
+    loc.region.snippet = { text };
+    enriched++;
   }
+  return enriched;
 }
 
 // ===== SARIF artifactLocation.uri 归一化 =====
@@ -424,7 +431,9 @@ function normalizeSarifUris(sarifObj, repoRoot) {
   return changed;
 }
 
-/** 对一批 SARIF 文件做 uri 归一化（原地写回变更文件），返回发生变更的文件数 */
+/** 对一批 SARIF 文件做 uri 归一化 + snippet 补充（原地写回变更文件），返回发生变更的文件数。
+ * uri 归一化将机器绝对路径转为相对仓库根；snippet 补充为「问题行上下各 2 行」上下文。
+ * 幂等：二次处理不产生新变更；重复补充时 snippet 文本一致，不重复写盘。 */
 function normalizeSarifFiles(sarifFiles, repoRoot) {
   let changedFiles = 0;
   for (const f of sarifFiles || []) {
@@ -434,8 +443,9 @@ function normalizeSarifFiles(sarifFiles, repoRoot) {
     } catch (e) {
       continue;
     }
-    const n = normalizeSarifUris(sarifObj, repoRoot);
-    if (n > 0) {
+    const nUri = normalizeSarifUris(sarifObj, repoRoot);
+    const nSnippet = enrichRegionSnippet(sarifObj);
+    if (nUri > 0 || nSnippet > 0) {
       fs.writeFileSync(f, JSON.stringify(sarifObj, null, 2), 'utf-8');
       changedFiles += 1;
     }
