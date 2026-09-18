@@ -299,6 +299,7 @@ function parsePreCommitLog(output) {
 }
 
 /** 为 SARIF results 补充 region.snippet（实际代码行内容），提升后端告警可读性。
+ * 截取「问题行上下各 2 行」的上下文窗口，而非仅问题行本身，便于后端展示定位上下文。
  * 文件路径为相对仓库根的路径（pre-commit 在仓库根运行）；读取失败静默跳过，不阻断报告生成。 */
 function enrichRegionSnippet(sarifObj) {
   const results = sarifObj && sarifObj.runs && sarifObj.runs[0] && sarifObj.runs[0].results;
@@ -312,9 +313,12 @@ function enrichRegionSnippet(sarifObj) {
     } catch (e) {
       continue; // 文件不存在或不可读（路径含特殊字符等），跳过 snippet
     }
-    const idx = loc.region.startLine - 1;
-    if (idx >= 0 && idx < lines.length) {
-      loc.region.snippet = { text: lines[idx] };
+    // 1-based 问题行 -> 窗口：上面 2 行 + 问题行 + 下面 2 行（越界自动裁剪）
+    const from = Math.max(0, loc.region.startLine - 3);
+    const to = Math.min(lines.length, loc.region.startLine + 2);
+    const snippetLines = lines.slice(from, to);
+    if (snippetLines.length > 0) {
+      loc.region.snippet = { text: snippetLines.join('\n') };
     }
   }
 }
