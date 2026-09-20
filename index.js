@@ -206,7 +206,23 @@ function runPreCommit(cmdResult) {
 
   const checkFailed = sp.status !== 0;
   if (checkFailed) {
-    console.log('[ERROR] pre-commit 检查失败');
+    // 区分"检查出告警"与"钩子安装/环境失败"：
+    //  - 检查出告警：钩子正常运行，输出含标准 "xxx....Failed" 钩子状态行（parsePreCommitLog 可解析出失败钩子）
+    //  - 安装/环境失败：spawn 失败、无失败钩子状态行，或输出含 pre-commit 未预期错误标志
+    const hasFailureHooks = parsePreCommitLog(output).length > 0;
+    const unexpectedError = /An unexpected error has occurred|Failed to install|InstallError|error occurred/i.test(output);
+    const installError = sp.error !== undefined || !hasFailureHooks || unexpectedError;
+
+    if (installError) {
+      console.log('[ERROR] pre-commit 执行失败（钩子安装或环境错误），任务按失败状态退出');
+      console.log('[INFO] 请检查网络连通性、钩子仓库地址（建议 GitCode 镜像仓）、.pre-commit-config.yaml 配置后重试');
+      console.log('      详细错误可查看 pre-commit 日志: ~/.cache/pre-commit/pre-commit.log');
+      console.log('\n如需了解更多 pre-commit 配置等信息，请查阅: https://gitcode.com/openlibing/docs/blob/main/static-code-analysis/solutions/pre-commit/README.md');
+      return { failed: true, output, failureType: 'install' };
+    }
+
+    // 检查出告警（钩子正常运行但发现问题）
+    console.log('[ERROR] pre-commit 检查发现告警');
     console.log('\n[INFO] 请在本地执行以下命令修复后重新提交:');
     console.log('1. 安装/初始化环境');
     console.log('   pip install pre-commit && pre-commit install --install-hooks');
@@ -218,11 +234,11 @@ function runPreCommit(cmdResult) {
     }
     console.log('\n如需了解更多告警屏蔽、pre-commit配置等信息，请查阅: https://gitcode.com/openlibing/docs/blob/main/static-code-analysis/solutions/pre-commit/README.md');
     // 不在此退出：pre-commit 失败时扫描报告同样有价值，报告上传完成后由 run() 统一按失败状态退出
-    return { failed: true, output };
+    return { failed: true, output, failureType: 'check' };
   }
   console.log('[OK] pre-commit 检查通过');
   console.log('如需了解更多告警屏蔽、pre-commit配置等信息，请查阅: https://gitcode.com/openlibing/docs/blob/main/static-code-analysis/solutions/pre-commit/README.md');
-  return { failed: false, output };
+  return { failed: false, output, failureType: 'none' };
 }
 
 /** sha256 hex，用于兜底 SARIF 指纹（后端 StandardSarifParser 用 partialFingerprints.primaryLocationLineHash 构建 fingerprintKey）。 */
@@ -732,6 +748,11 @@ console.log('\n===== [1] 检查 Python 环境 =====');
   }
 
   if (preCommitResult.failed) {
+    if (preCommitResult.failureType === 'install') {
+      // 钩子安装/环境失败：任何场景都必须任务失败（不是检查出告警）
+      console.log('[ERROR] pre-commit 钩子安装或环境错误，任务按失败状态退出');
+      process.exit(1);
+    }
     if (isPrEvent()) {
       // 门禁场景（PR 增量检查）：检查失败必须退出，阻塞合并
       console.log('[ERROR] pre-commit 检查失败（门禁），任务按失败状态退出');

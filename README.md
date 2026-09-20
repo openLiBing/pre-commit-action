@@ -78,6 +78,7 @@ jobs:
 
 - **PR 类型触发**（mr / pull_request / note）只做门禁检查，**不生成/收集 SARIF 报告**（门禁失败仍按 `exit(1)` 退出）；报告由版本级触发（push / workflow_dispatch / schedule）时产出，上传由 workflow 按需编排
 - **检查失败仍生成报告**：pre-commit 失败时已生成的报告照常产出。**版本级触发**（push / workflow_dispatch / schedule）检查发现告警仅告警提示，**不按失败退出**；仅 PR 门禁场景按失败退出
+- **钩子安装/环境失败按失败退出**：区分"检查出告警"与"钩子安装/环境失败"——钩子正常运行但发现问题（输出含标准 `xxx....Failed` 状态行）按上述门禁/版本级规则处理；钩子安装失败（hook 仓库拉取失败、依赖安装失败、spawn 失败等，输出含 `An unexpected error has occurred` 或无法解析出失败钩子状态行）**任何场景都按失败退出**，不属于"版本级告警不失败"范畴
 - **数据源优先级**：① 输入 `sarif-file` 指定的文件/目录（支持逗号多值）；② 报告目录 `report-dir` 下已有的 `*.sarif`；③ 均无且日志有失败钩子时走兜底能力。同一工具已提供报告则直接使用，不再日志解析
 - **兜底能力**：按工具维度处理失败钩子的报告。每个失败钩子：① 用户已提供该工具的 `*.sarif` → 直接使用；② 未提供且工具在支持解析列表（第一批：**clang-tidy / bandit / gosec / spotbugs / rust-clippy / eslint / gitleaks / detect-secrets**）→ 解析日志出具体问题（文件/行/列/规则/级别）生成 `<tool>.sarif`；③ 未提供且不支持 → 不生成报告，仅提示"`<工具> 未查询到 sarif 文件，且暂不支持日志自动解析"。日志无失败钩子则跳过生成
 
