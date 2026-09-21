@@ -22,7 +22,7 @@ PR 增量检查流程：
 | report-dir | SARIF 报告约定目录（机器临时目录，非代码仓目录）。插件扫描该目录下 `*.sarif` 作为用户提供的报告；工具未提供时按支持列表解析 pre-commit 日志兜底生成 `<tool>.sarif` 到该目录。只生成报告文件，上传由 workflow 中 openlibing-upload-sarif 完成                       | 否   | /tmp/pre-commit-reports/ |
 | sarif-file | SARIF 文件/目录路径，逗号分隔支持多值（与 openlibing-upload-sarif 的 `sarif_file` 一致）：单个文件、多个文件、单个目录、多个目录（目录自动扫描其中所有 `.sarif` 文件，非递归）。填写后优先于 `report-dir` 目录扫描；未填写时回退扫描 `report-dir` 目录下 `*.sarif` | 否   | 空（回退 report-dir）    |
 
-> **报告生成约定**：报告数据源优先级为 ① 输入 `sarif-file` 指定的文件/目录（支持逗号多值）；② 报告目录 `report-dir` 下已有的 `*.sarif`；③ 均无且日志有失败钩子时走兜底能力。同一工具已提供报告则直接使用，不再日志解析。插件只负责生成/归一化报告文件，**不负责上传回调**。
+> **报告生成约定**：报告数据源优先级为 ① 输入 `sarif-file` 指定的文件/目录（支持逗号多值）；② 报告目录 `report-dir` 下已有的 `*.sarif`；③ 均无且日志有失败钩子时走兜底能力。同一工具已提供报告则直接使用，不再日志解析。插件只负责生成报告文件，**不负责上传回调**（SARIF 的 uri 归一化与代码上下文补齐由 openlibing-upload-sarif 统一完成）。
 
 ## 输出参数
 

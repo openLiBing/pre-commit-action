@@ -1,5 +1,4 @@
 const { execSync, execFileSync, spawnSync } = require('child_process');
-const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { buildToolSarif, matchToolParser } = require('./tool-parsers');
@@ -241,12 +240,6 @@ function runPreCommit(cmdResult) {
   return { failed: false, output, failureType: 'none' };
 }
 
-/** sha256 hex，用于兜底 SARIF 指纹（后端 StandardSarifParser 用 partialFingerprints.primaryLocationLineHash 构建 fingerprintKey）。 */
-function _locationHash(parts) {
-  const raw = parts.map((p) => (p === undefined || p === null ? '' : String(p))).join('|');
-  return crypto.createHash('sha256').update(raw, 'utf8').digest('hex');
-}
-
 /** 解析 pre-commit 运行日志，提取失败的钩子（兜底 SARIF 数据源）。
  * pre-commit 标准输出格式：
  *   trailing whitespace.................................................Failed
@@ -320,155 +313,6 @@ function parsePreCommitLog(output) {
   return failures;
 }
 
-/** 为 SARIF results 补充 region.snippet（实际代码行内容），提升后端告警可读性。
- * 截取「问题行上下各 2 行」的上下文窗口，而非仅问题行本身，便于后端展示定位上下文。
- * 已有 snippet 会被覆盖为标准窗口（如 gitleaks 自带的单行 snippet）；文本一致视为幂等，不计数。
- * 文件路径为相对仓库根的路径（pre-commit 在仓库根运行）；读取失败静默跳过，不阻断报告生成。
- * @returns {number} 本次实际新补充/变更 snippet 的 result 数量 */
-function enrichRegionSnippet(sarifObj) {
-  const results = sarifObj && sarifObj.runs && sarifObj.runs[0] && sarifObj.runs[0].results;
-  if (!results) return 0;
-  let enriched = 0;
-  for (const r of results) {
-    const loc = r.locations && r.locations[0] && r.locations[0].physicalLocation;
-    if (!loc || !loc.artifactLocation || !loc.artifactLocation.uri || !loc.region || !loc.region.startLine) continue;
-    let lines;
-    try {
-      lines = fs.readFileSync(loc.artifactLocation.uri, 'utf-8').split(/\r?\n/);
-    } catch (e) {
-      continue; // 文件不存在或不可读（路径含特殊字符等），跳过 snippet
-    }
-    // 1-based 问题行 -> 窗口：上面 2 行 + 问题行 + 下面 2 行（越界自动裁剪）
-    const from = Math.max(0, loc.region.startLine - 3);
-    const to = Math.min(lines.length, loc.region.startLine + 2);
-    const snippetLines = lines.slice(from, to);
-    if (snippetLines.length === 0) continue;
-    const text = snippetLines.join('\n');
-    // 幂等：snippet 已是标准窗口内容则不重复计数
-    if (loc.region.snippet && loc.region.snippet.text === text) continue;
-    loc.region.snippet = { text };
-    enriched++;
-  }
-  return enriched;
-}
-
-// ===== SARIF artifactLocation.uri 归一化 =====
-// 不同工具产出的 uri 形态不一：部分工具（如 spotbugs）输出 runner 机器绝对路径
-// （/home/runner/work/repo/repo/src/Foo.java），部分工具（如 gitleaks）输出相对路径。
-// 机器绝对路径会造成：1) 后端告警展示路径带机器前缀不可读；2) 无 snippet 时指纹
-// （_locationHash 含 file 路径）含机器绝对路径，同一告警在不同 runner 上指纹不同，后端去重失效。
-// 上传前统一剥离仓库根前缀转换为相对路径，uri 变化时同步重算指纹，保证跨机器稳定。
-
-/** 路径分隔符统一为正斜杠（兼容 Windows 反斜杠路径） */
-function normalizeSlashes(p) {
-  return String(p || '').replace(/\\/g, '/');
-}
-
-/** 剥离 file:// 前缀并做 URL 解码；非 file:// 原样返回 */
-function stripFileScheme(uri) {
-  if (!/^file:\/\//i.test(uri)) return uri;
-  let stripped = uri.replace(/^file:\/\//i, '');
-  try {
-    stripped = decodeURIComponent(stripped);
-  } catch (e) {
-    // 解码失败保留原样
-  }
-  // file:///C:/... -> C:/...（去掉盘符前的斜杠）
-  stripped = stripped.replace(/^\/+([a-zA-Z]:)/, '$1');
-  return stripped;
-}
-
-/** 是否绝对路径（POSIX / 或 Windows 盘符），兼容任意平台运行 */
-function isAbsoluteLike(p) {
-  return p.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(p);
-}
-
-/** 判断 uri（已去 file://）是否位于 repoRoot 之下（忽略大小写与分隔符差异） */
-function isUnderRepoRoot(uri, repoRoot) {
-  const u = normalizeSlashes(uri);
-  const r = normalizeSlashes(repoRoot).replace(/\/+$/, '');
-  if (!r) return false;
-  if (u === r) return true;
-  return u.toLowerCase().startsWith(`${r.toLowerCase()}/`);
-}
-
-/** 将单个 uri 归一化为相对仓库根路径；null 表示无需变更 */
-function toRepoRelative(uri, repoRoot) {
-  if (!uri || !repoRoot) return null;
-  const decoded = stripFileScheme(uri);
-  if (!decoded) return null;
-  if (isAbsoluteLike(decoded)) {
-    if (!isUnderRepoRoot(decoded, repoRoot)) return null;
-    return normalizeSlashes(path.relative(repoRoot, decoded));
-  }
-  // 相对路径：剥离 ./ 前缀并统一分隔符（相对仓库根即当前工作目录）
-  return normalizeSlashes(decoded).replace(/^\.\//, '');
-}
-
-/** 解析仓库根目录：优先取 workspace 下 git 仓库根（兼容 repo_workspace 嵌套），兜底 workspace 本身 */
-function resolveRepoRoot(workspace) {
-  const gitDir = execCapture(`find ${workspace} -maxdepth 3 -name ".git" -type d 2>/dev/null | head -1`);
-  if (gitDir) {
-    console.log(`[INFO] 仓库根目录（git 根）: ${path.dirname(gitDir)}`);
-    return path.dirname(gitDir);
-  }
-  console.log(`[INFO] 仓库根目录（兜底 workspace）: ${workspace}`);
-  return workspace;
-}
-
-/** 归一化 SARIF 对象中全部 result 的 artifactLocation.uri（原地修改）。
- * uri 变化时同步重算 primaryLocationLineHash，保持与生成时 _locationHash 同一指纹方案，
- * 消除机器路径对跨机器去重的影响。@returns {number} uri 发生变化的 result 数量 */
-function normalizeSarifUris(sarifObj, repoRoot) {
-  const run = sarifObj && sarifObj.runs && sarifObj.runs[0];
-  const results = run && run.results;
-  if (!Array.isArray(results) || !repoRoot) return 0;
-  const toolName = (run.tool && run.tool.driver && run.tool.driver.name) || '';
-  let changed = 0;
-  for (const r of results) {
-    const loc = r && r.locations && r.locations[0] && r.locations[0].physicalLocation;
-    if (!loc || !loc.artifactLocation) continue;
-    const rel = toRepoRelative(loc.artifactLocation.uri, repoRoot);
-    if (rel === null || rel === loc.artifactLocation.uri) continue;
-    loc.artifactLocation.uri = rel;
-    changed += 1;
-    // uri 变化时重算指纹，保证 uri 与指纹一致（与 tool-parsers.buildToolSarif 同款 _locationHash 方案）
-    if (r.partialFingerprints && r.partialFingerprints.primaryLocationLineHash) {
-      const region = loc.region || {};
-      r.partialFingerprints.primaryLocationLineHash = _locationHash([
-        toolName,
-        r.ruleId,
-        rel,
-        region.startLine,
-        region.startColumn
-      ]);
-    }
-  }
-  return changed;
-}
-
-/** 对一批 SARIF 文件做 uri 归一化 + snippet 补充（原地写回变更文件），返回发生变更的文件数。
- * uri 归一化将机器绝对路径转为相对仓库根；snippet 补充为「问题行上下各 2 行」上下文。
- * 幂等：二次处理不产生新变更；重复补充时 snippet 文本一致，不重复写盘。 */
-function normalizeSarifFiles(sarifFiles, repoRoot) {
-  let changedFiles = 0;
-  for (const f of sarifFiles || []) {
-    let sarifObj;
-    try {
-      sarifObj = JSON.parse(fs.readFileSync(f, 'utf-8'));
-    } catch (e) {
-      continue;
-    }
-    const nUri = normalizeSarifUris(sarifObj, repoRoot);
-    const nSnippet = enrichRegionSnippet(sarifObj);
-    if (nUri > 0 || nSnippet > 0) {
-      fs.writeFileSync(f, JSON.stringify(sarifObj, null, 2), 'utf-8');
-      changedFiles += 1;
-    }
-  }
-  return changedFiles;
-}
-
 /** 由 pre-commit 运行日志按工具维度补齐兜底 SARIF 文件，写入报告目录。
  * 每个失败钩子按规则处理：
  *   1. 用户已提供该工具 sarif 文件（报告目录中存在 <tool>.sarif）→ 直接使用，跳过日志解析
@@ -487,18 +331,13 @@ function generateFallbackSarif(preCommitOutput, existingSarifNames) {
   // 报告目录可能不存在（纯拦截钩子不生成报告），兜底生成前确保目录可写
   fs.mkdirSync(reportDir, { recursive: true });
   const generated = [];
-  // uri 归一化需要仓库根：优先 git 根（兼容 repo_workspace 嵌套），兜底 workspace
-  const repoRoot = resolveRepoRoot(process.env.WORKSPACE || process.cwd());
 
   // 用户已提供的 sarif 文件名集合（小写），用于判断"该工具用户是否已输出 sarif"
   const existing = new Set((existingSarifNames || []).map(n => String(n).toLowerCase()));
 
   const writeSarif = (name, sarifObj) => {
     try {
-      // 1) uri 归一化：机器绝对路径 -> 相对仓库根（uri 变化时同步重算指纹，保证跨机器去重稳定）
-      normalizeSarifUris(sarifObj, repoRoot);
-      // 2) 补充 region.snippet（实际代码行），提升后端告警可读性；读取失败不影响报告本身
-      enrichRegionSnippet(sarifObj);
+      // uri 归一化与代码上下文补齐由 openlibing-upload-sarif 在上传前完成，此处直接写盘
       fs.writeFileSync(path.join(reportDir, name), JSON.stringify(sarifObj, null, 2), 'utf-8');
       generated.push(name);
       return true;
@@ -636,13 +475,7 @@ function collectScanReports(preCommitOutput) {
     return [];
   }
 
-  // 上传前 uri 归一化（兜底文件生成时已归一化，此处幂等、无二次变更）：
-  // 统一用户工具直出的机器绝对路径 -> 相对仓库根，保证后端告警路径可读、无 snippet 时指纹跨机器稳定
-  const repoRoot = resolveRepoRoot(workspace);
-  const normalizedCount = normalizeSarifFiles(uploadFiles.map(u => u.file), repoRoot);
-  if (normalizedCount > 0) {
-    console.log(`[INFO] 已归一化 ${normalizedCount} 个 SARIF 文件的 uri（机器绝对路径 -> 相对仓库根）`);
-  }
+  // 上传前不做 uri 归一化/代码上下文补齐：由 openlibing-upload-sarif 统一完成，避免双份逻辑
 
   console.log(`[OK] 收集到 ${uploadFiles.length} 个 SARIF 报告:`);
   uploadFiles.forEach(u => console.log(`  - ${u.file}`));
@@ -777,11 +610,5 @@ module.exports = {
   run,
   collectScanReports,
   parsePreCommitLog,
-  generateFallbackSarif,
-  enrichRegionSnippet,
-  _locationHash,
-  resolveRepoRoot,
-  toRepoRelative,
-  normalizeSarifUris,
-  normalizeSarifFiles
+  generateFallbackSarif
 };
