@@ -4,7 +4,7 @@
 /***/ 136:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
-const { execSync, execFileSync, spawnSync } = __nccwpck_require__(317);
+const { execSync, execFileSync, spawn } = __nccwpck_require__(317);
 const fs = __nccwpck_require__(896);
 const path = __nccwpck_require__(928);
 const { buildToolSarif, matchToolParser } = __nccwpck_require__(737);
@@ -191,32 +191,73 @@ function buildAutoArgs() {
   return { type: 'args', args: '--all-files' };
 }
 
-function runPreCommit(cmdResult) {
+/**
+ * 流式执行子进程：实时转发 stdout/stderr 到控制台，同时完整累积输出文本。
+ * 不使用 spawnSync：其默认 maxBuffer 仅 1MB，大型项目（如 C 项目 clang-tidy 全量检查）
+ * 输出超限时会被硬截断并抛 ERR_CHILD_PROCESS_STDIO_MAXBUFFER，导致：
+ *   1) 误判为"钩子安装/环境错误"（sp.error 非空 → failureType=install）；
+ *   2) 日志兜底解析（parsePreCommitLog / generateFallbackSarif）依据缺失。
+ * @param {string} command 可执行文件
+ * @param {string[]} args 命令行参数
+ * @param {object} [options] spawn 选项（如 cwd）
+ * @returns {Promise<{status: (number|null), error: (Error|undefined), output: string}>}
+ */
+function runStreaming(command, args, options = {}) {
+  return new Promise((resolve) => {
+    let output = '';
+    let settled = false;
+    const done = (result) => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
+
+    let sp;
+    try {
+      sp = spawn(command, args, { cwd: options.cwd });
+    } catch (e) {
+      done({ status: null, error: e, output });
+      return;
+    }
+
+    sp.stdout.setEncoding('utf8');
+    sp.stderr.setEncoding('utf8');
+    sp.stdout.on('data', (chunk) => {
+      output += chunk;
+      process.stdout.write(chunk);
+    });
+    sp.stderr.on('data', (chunk) => {
+      output += chunk;
+      process.stderr.write(chunk);
+    });
+    sp.on('error', (err) => done({ status: null, error: err, output }));
+    sp.on('close', (code) => done({ status: code, error: undefined, output }));
+  });
+}
+
+async function runPreCommit(cmdResult) {
   if (cmdResult.type === 'skip') {
     console.log('[OK] 无需检查');
     return { failed: false, output: '' };
   }
 
-  // 捕获 pre_commit run 的输出（stdout+stderr），用于用户未提供 SARIF 时的日志兜底解析；
-  // 同时原样转发到控制台，不改变既有日志可见性。
+  // 流式捕获 pre_commit run 的输出（stdout+stderr），实时转发控制台且完整累积，
+  // 供用户未提供 SARIF 时的日志兜底解析；不使用 spawnSync 以免 maxBuffer 截断大输出。
   const runArgs = cmdResult.type === 'file'
     ? ['-m', 'pre_commit', 'run', '--files', ...cmdResult.files]
     : ['-m', 'pre_commit', 'run', ...cmdResult.args.split(' ')];
   console.log(`> python ${runArgs.join(' ')}`);
 
-  const sp = spawnSync('python', runArgs, { encoding: 'utf-8', cwd: process.cwd() });
-  const output = (sp.stdout || '') + (sp.stderr || '');
-  if (sp.stdout) process.stdout.write(sp.stdout);
-  if (sp.stderr) process.stderr.write(sp.stderr);
+  const { status, error, output } = await runStreaming('python', runArgs, { cwd: process.cwd() });
 
-  const checkFailed = sp.status !== 0;
+  const checkFailed = status !== 0;
   if (checkFailed) {
     // 区分"检查出告警"与"钩子安装/环境失败"：
     //  - 检查出告警：钩子正常运行，输出含标准 "xxx....Failed" 钩子状态行（parsePreCommitLog 可解析出失败钩子）
     //  - 安装/环境失败：spawn 失败、无失败钩子状态行，或输出含 pre-commit 未预期错误标志
     const hasFailureHooks = parsePreCommitLog(output).length > 0;
     const unexpectedError = /An unexpected error has occurred|Failed to install|InstallError|error occurred/i.test(output);
-    const installError = sp.error !== undefined || !hasFailureHooks || unexpectedError;
+    const installError = error !== undefined || !hasFailureHooks || unexpectedError;
 
     if (installError) {
       console.log('[ERROR] pre-commit 执行失败（钩子安装或环境错误），任务按失败状态退出');
@@ -577,7 +618,7 @@ console.log('\n===== [1] 检查 Python 环境 =====');
   }
 
   console.log('\n===== [6] 运行 pre-commit 检查 =====');
-  const preCommitResult = runPreCommit(cmdResult);
+  const preCommitResult = await runPreCommit(cmdResult);
 
   // 收集/兜底生成 SARIF 报告文件（不做上传回调，上传由 workflow 中的 openlibing-upload-sarif 完成）
   const sarifFiles = collectScanReports(preCommitResult.output);
