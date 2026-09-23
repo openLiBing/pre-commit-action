@@ -65,11 +65,11 @@ jobs:
           cache: true
       - name: run pre-commit (generate sarif)
         id: pre-commit
-        uses: openlibing/pre-commit-action@latest
+        uses: openlibing/pre-commit-action@v1.0.40
         with:
           report-dir: /tmp/pre-commit-reports/
       - name: upload sarif reports
-        uses: openlibing/openlibing-upload-sarif@latest
+        uses: openlibing/openlibing-upload-sarif@v1.2.10
         with:
           sarif-file: ${{ steps.pre-commit.outputs.sarif-files }}
 ```
@@ -103,7 +103,7 @@ jobs:
           python-version: "3.14"
 
       - name: run pre-commit
-        uses: openlibing/pre-commit-action@v1.0.30
+        uses: openlibing/pre-commit-action@v1.0.40
         with:
           extra_args: ${{ inputs.extra_args }}
 ```
@@ -163,7 +163,7 @@ jobs:
           python-version: "3.14"
 
       - name: run pre-commit
-        uses: openlibing/pre-commit-action@v1.0.30
+        uses: openlibing/pre-commit-action@v1.0.40
         with:
           extra_args: ${{ inputs.extra_args }}
 ```
