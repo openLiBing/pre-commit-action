@@ -216,6 +216,13 @@ function runStreaming(command, args, options = {}) {
 
     sp.stdout.setEncoding('utf8');
     sp.stderr.setEncoding('utf8');
+    // 防御：子进程管道异常中断（如被强杀）时流可能触发 error，未监听会抛未捕获异常导致 action 崩溃
+    sp.stdout.on('error', (err) => {
+      console.log(`[WARN] pre-commit 输出流异常（stdout）: ${err.message}`);
+    });
+    sp.stderr.on('error', (err) => {
+      console.log(`[WARN] pre-commit 输出流异常（stderr）: ${err.message}`);
+    });
     sp.stdout.on('data', (chunk) => {
       output += chunk;
       process.stdout.write(chunk);
@@ -225,7 +232,12 @@ function runStreaming(command, args, options = {}) {
       process.stderr.write(chunk);
     });
     sp.on('error', (err) => done({ status: null, error: err, output }));
-    sp.on('close', (code) => done({ status: code, error: undefined, output }));
+    sp.on('close', (code, signal) => {
+      if (code === null && signal) {
+        console.log(`[WARN] pre-commit 子进程被信号终止: ${signal}`);
+      }
+      done({ status: code, error: undefined, output });
+    });
   });
 }
 
