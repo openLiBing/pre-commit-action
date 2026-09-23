@@ -1,5 +1,5 @@
 name: "pre-commit-action"
-version: 1.0.33
+version: 1.0.40
 author: "test-devops"
 description: "安装 pre-commit 并对代码仓库执行钩子检查"
 
@@ -28,12 +28,38 @@ inputs:
         disabled_conditions: []
       validation:
         required_message: ""
+  report-dir:
+    description: "SARIF 报告约定目录（机器临时目录，非代码仓目录）。插件扫描该目录下 *.sarif 作为用户提供的报告；工具未提供时按支持列表解析 pre-commit 日志兜底生成 <tool>.sarif 到该目录。只生成报告文件，上传由 workflow 中 openlibing-upload-sarif 完成"
+    required: false
+    default: "/tmp/pre-commit-reports/"
+    layout:
+      type: "input"
+      label: "报告目录"
+      extend_prop:
+        visible_conditions: []
+        disabled_conditions: []
+      validation:
+        required_message: ""
+  sarif-file:
+    description: "SARIF 文件/目录路径，逗号分隔支持多值（与 openlibing-upload-sarif 的 sarif_file 一致）：单个文件、多个文件、单个目录、多个目录（目录自动扫描其中所有 .sarif 文件，非递归）。填写后优先于 report-dir 目录扫描；未填写时回退扫描 report-dir 目录下 *.sarif"
+    required: false
+    default: ""
+    layout:
+      type: "input"
+      label: "SARIF 文件/目录"
+      extend_prop:
+        visible_conditions: []
+        disabled_conditions: []
+      validation:
+        required_message: ""
 
 outputs:
   result:
     description: "pre-commit 运行结果：success 或 failed"
   checked_files:
     description: "pre-commit 检查的文件范围"
+  sarif-files:
+    description: "收集/兜底生成的 SARIF 文件绝对路径列表（逗号分隔，可空）。可直接传给 openlibing-upload-sarif 的 sarif-file input 完成上传"
 
 runs:
   using: "node16"

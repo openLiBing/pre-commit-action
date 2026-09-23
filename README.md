@@ -1,6 +1,6 @@
 ## 简介
 
-安装 pre-commit 并对代码仓库执行钩子检查。支持 PR 增量检查和全量检查自动切换。
+安装 pre-commit 并对代码仓库执行钩子检查。支持 PR 增量检查和全量检查自动切换。检查结束后收集 SARIF 报告：优先使用用户提供（`sarif-file` / `report-dir`）的报告；工具未提供且插件支持日志解析时，自动解析 pre-commit 日志兜底生成 `<tool>.sarif`。报告文件通过 `sarif-files` output 输出，**上传与归档由 workflow 中的 openlibing-upload-sarif 完成**，本插件不做上传回调。
 
 ## 工作模式
 
@@ -16,16 +16,71 @@ PR 增量检查流程：
 
 ## 输入参数
 
-| 参数       | 说明                                                                                           | 必填 | 默认值         |
-| ---------- | ---------------------------------------------------------------------------------------------- | ---- | -------------- |
-| extra_args | pre-commit 运行参数。为空时自动判断：PR 事件检查增量文件，非 PR 检查全量；填写时按指定参数执行 | 否   | 空（自动判断） |
+| 参数       | 说明                                                                                                                                                                                                                                                               | 必填 | 默认值                   |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---- | ------------------------ |
+| extra_args | pre-commit 运行参数。为空时自动判断：PR 事件检查增量文件，非 PR 检查全量；填写时按指定参数执行                                                                                                                                                                     | 否   | 空（自动判断）           |
+| report-dir | SARIF 报告约定目录（机器临时目录，非代码仓目录）。插件扫描该目录下 `*.sarif` 作为用户提供的报告；工具未提供时按支持列表解析 pre-commit 日志兜底生成 `<tool>.sarif` 到该目录。只生成报告文件，上传由 workflow 中 openlibing-upload-sarif 完成                       | 否   | /tmp/pre-commit-reports/ |
+| sarif-file | SARIF 文件/目录路径，逗号分隔支持多值（与 openlibing-upload-sarif 的 `sarif_file` 一致）：单个文件、多个文件、单个目录、多个目录（目录自动扫描其中所有 `.sarif` 文件，非递归）。填写后优先于 `report-dir` 目录扫描；未填写时回退扫描 `report-dir` 目录下 `*.sarif` | 否   | 空（回退 report-dir）    |
+
+> **报告生成约定**：报告数据源优先级为 ① 输入 `sarif-file` 指定的文件/目录（支持逗号多值）；② 报告目录 `report-dir` 下已有的 `*.sarif`；③ 均无且日志有失败钩子时走兜底能力。同一工具已提供报告则直接使用，不再日志解析。插件只负责生成报告文件，**不负责上传回调**（SARIF 的 uri 归一化与代码上下文补齐由 openlibing-upload-sarif 统一完成）。
 
 ## 输出参数
 
-| 参数          | 说明                        |
-| ------------- | --------------------------- |
-| result        | 运行结果：success 或 failed |
-| checked_files | 检查的文件范围              |
+| 参数          | 说明                                                                                                               |
+| ------------- | ------------------------------------------------------------------------------------------------------------------ |
+| result        | 运行结果：success 或 failed                                                                                        |
+| checked_files | 检查的文件范围                                                                                                     |
+| sarif-files   | 收集/兜底生成的 SARIF 文件绝对路径列表（逗号分隔，可空），可直接传给 openlibing-upload-sarif 的 `sarif-file` input |
+
+## 报告生成与上传编排
+
+本插件只负责**生成/收集 SARIF 报告文件**，不做上传回调。需要归档扫描结果到 openlibing 时，在 workflow 中串接 **openlibing-upload-sarif** 完成 OBS 上传与后端回调。
+
+### 报告契约
+
+1. 各工具钩子把原始报告（JSON 等）输出到约定目录（默认 `/tmp/pre-commit-reports/`，input `report-dir` 可覆盖）
+2. 业务仓将原始报告转换为 SARIF 2.1.0，文件名 `<tool>.sarif` 写入同一约定目录（或通过 `sarif-file` input 直接指定）
+3. 工具未提供报告且插件支持日志解析时，插件自动解析 pre-commit 日志兜底生成 `<tool>.sarif`
+4. workflow 读取 `sarif-files` output，传给 openlibing-upload-sarif 的 `sarif-file` input 完成上传
+
+### 串接示例
+
+```yaml
+# .gitcode/workflows/pre-commit-report.yml
+on:
+  workflow_dispatch:
+permissions:
+  repository: read
+  id-token: write # OIDC 免密换证必需（openlibing-upload-sarif 换华为云临时凭证用）
+jobs:
+  pre-commit-report:
+    runs-on: ["codearts-hosted", "ubuntu-latest", "x64", "slim"]
+    steps:
+      - name: Checkout repository
+        uses: checkout
+      - name: setup-python
+        uses: setup-python
+        with:
+          version: 3.14
+          cache: true
+      - name: run pre-commit (generate sarif)
+        id: pre-commit
+        uses: openlibing/pre-commit-action@v1.0.40
+        with:
+          report-dir: /tmp/pre-commit-reports/
+      - name: upload sarif reports
+        uses: openlibing/openlibing-upload-sarif@v1.2.10
+        with:
+          sarif-file: ${{ steps.pre-commit.outputs.sarif-files }}
+```
+
+### 行为说明
+
+- **PR 类型触发**（mr / pull_request / note）只做门禁检查，**不生成/收集 SARIF 报告**（门禁失败仍按 `exit(1)` 退出）；报告由版本级触发（push / workflow_dispatch / schedule）时产出，上传由 workflow 按需编排
+- **检查失败仍生成报告**：pre-commit 失败时已生成的报告照常产出。**版本级触发**（push / workflow_dispatch / schedule）检查发现告警仅告警提示，**不按失败退出**；仅 PR 门禁场景按失败退出
+- **钩子安装/环境失败按失败退出**：区分"检查出告警"与"钩子安装/环境失败"——钩子正常运行但发现问题（输出含标准 `xxx....Failed` 状态行）按上述门禁/版本级规则处理；钩子安装失败（hook 仓库拉取失败、依赖安装失败、spawn 失败等，输出含 `An unexpected error has occurred` 或无法解析出失败钩子状态行）**任何场景都按失败退出**，不属于"版本级告警不失败"范畴
+- **数据源优先级**：① 输入 `sarif-file` 指定的文件/目录（支持逗号多值）；② 报告目录 `report-dir` 下已有的 `*.sarif`；③ 均无且日志有失败钩子时走兜底能力。同一工具已提供报告则直接使用，不再日志解析
+- **兜底能力**：按工具维度处理失败钩子的报告。每个失败钩子：① 用户已提供该工具的 `*.sarif` → 直接使用；② 未提供且工具在支持解析列表（第一批：**clang-tidy / bandit / gosec / spotbugs / rust-clippy / eslint / gitleaks / detect-secrets**）→ 解析日志出具体问题（文件/行/列/规则/级别）生成 `<tool>.sarif`；③ 未提供且不支持 → 不生成报告，仅提示"`<工具> 未查询到 sarif 文件，且暂不支持日志自动解析"。日志无失败钩子则跳过生成
 
 ## 使用示例
 
@@ -48,7 +103,7 @@ jobs:
           python-version: "3.14"
 
       - name: run pre-commit
-        uses: openlibing/pre-commit-action@v1.0.0
+        uses: openlibing/pre-commit-action@v1.0.40
         with:
           extra_args: ${{ inputs.extra_args }}
 ```
@@ -80,13 +135,13 @@ repos:
     hooks:
       - id: black
 
-  # ❌ GitHub 仓库 — gitleaks 敏感信息扫描，需要自定义执行机
-  # 安装说明：自动安装依赖 Go 运行环境，有外网代理可自动编译安装（200M+）
-  - repo: https://github.com/gitleaks/gitleaks
-    rev: v8.30.1
+  # ❌ GitHub 仓库 — detect-secrets 敏感信息扫描，需要自定义执行机
+  # 安装说明：纯 Python，pip 安装（网络要求低）；首次使用需生成 baseline：detect-secrets scan > .secrets.baseline
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
     hooks:
-      - id: gitleaks
-        entry: gitleaks dir
+      - id: detect-secrets
+        args: ["--baseline", ".secrets.baseline"]
 ```
 
 ### 云端执行机（仅使用 GitCode 镜像仓的 hooks）
@@ -108,7 +163,7 @@ jobs:
           python-version: "3.14"
 
       - name: run pre-commit
-        uses: openlibing/pre-commit-action@v1.0.0
+        uses: openlibing/pre-commit-action@v1.0.40
         with:
           extra_args: ${{ inputs.extra_args }}
 ```
@@ -126,13 +181,13 @@ repos:
       - id: trailing-whitespace
       - id: end-of-file-fixer
 
-  # ✅ GitCode 镜像仓 — gitleaks 敏感信息扫描，国内网络可使用镜像仓加速下载
-  # 安装说明：自动安装依赖 Go 运行环境，国内网络无代理建议先手动下载并安装 Go 环境：https://golang.google.cn/dl
-  - repo: https://gitcode.com/GitHub_Trending/gi/gitleaks
-    rev: v8.30.1
+  # ✅ GitCode 镜像仓 — detect-secrets 敏感信息扫描，国内网络可使用镜像仓加速下载
+  # 安装说明：纯 Python，pip 安装（网络要求低）；首次使用需生成 baseline：detect-secrets scan > .secrets.baseline
+  - repo: https://gitcode.com/gh_mirrors/de/detect-secrets
+    rev: v1.5.0
     hooks:
-      - id: gitleaks
-        entry: gitleaks dir
+      - id: detect-secrets
+        args: ["--baseline", ".secrets.baseline"]
 ```
 
 > **判断依据**：hooks 的 `repo` 地址以 `https://gitcode.com/` 开头的是 GitCode 镜像仓，云端执行机可直接访问；以 `https://github.com/` 或其他外部地址开头的，需要使用自定义执行机。

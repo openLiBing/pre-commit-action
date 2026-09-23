@@ -1,81 +1,13 @@
 /******/ (() => { // webpackBootstrap
 /******/ 	var __webpack_modules__ = ({
 
-/***/ 317:
-/***/ ((module) => {
+/***/ 136:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
-"use strict";
-module.exports = require("child_process");
-
-/***/ }),
-
-/***/ 896:
-/***/ ((module) => {
-
-"use strict";
-module.exports = require("fs");
-
-/***/ }),
-
-/***/ 857:
-/***/ ((module) => {
-
-"use strict";
-module.exports = require("os");
-
-/***/ }),
-
-/***/ 928:
-/***/ ((module) => {
-
-"use strict";
-module.exports = require("path");
-
-/***/ })
-
-/******/ 	});
-/************************************************************************/
-/******/ 	// The module cache
-/******/ 	var __webpack_module_cache__ = {};
-/******/ 	
-/******/ 	// The require function
-/******/ 	function __nccwpck_require__(moduleId) {
-/******/ 		// Check if module is in cache
-/******/ 		var cachedModule = __webpack_module_cache__[moduleId];
-/******/ 		if (cachedModule !== undefined) {
-/******/ 			return cachedModule.exports;
-/******/ 		}
-/******/ 		// Create a new module (and put it into the cache)
-/******/ 		var module = __webpack_module_cache__[moduleId] = {
-/******/ 			// no module.id needed
-/******/ 			// no module.loaded needed
-/******/ 			exports: {}
-/******/ 		};
-/******/ 	
-/******/ 		// Execute the module function
-/******/ 		var threw = true;
-/******/ 		try {
-/******/ 			__webpack_modules__[moduleId](module, module.exports, __nccwpck_require__);
-/******/ 			threw = false;
-/******/ 		} finally {
-/******/ 			if(threw) delete __webpack_module_cache__[moduleId];
-/******/ 		}
-/******/ 	
-/******/ 		// Return the exports of the module
-/******/ 		return module.exports;
-/******/ 	}
-/******/ 	
-/************************************************************************/
-/******/ 	/* webpack/runtime/compat */
-/******/ 	
-/******/ 	if (typeof __nccwpck_require__ !== 'undefined') __nccwpck_require__.ab = __dirname + "/";
-/******/ 	
-/************************************************************************/
-var __webpack_exports__ = {};
-const { execSync, execFileSync } = __nccwpck_require__(317);
+const { execSync, execFileSync, spawn } = __nccwpck_require__(317);
 const fs = __nccwpck_require__(896);
 const path = __nccwpck_require__(928);
-const os = __nccwpck_require__(857);
+const { buildToolSarif, matchToolParser } = __nccwpck_require__(737);
 
 const PIP_MIRROR_DEFAULT = 'https://mirrors.huaweicloud.com/repository/pypi/simple';
 const GO_PROXY_DEFAULT = 'https://mirrors.huaweicloud.com/repository/goproxy/';
@@ -86,8 +18,14 @@ let PIP_MIRROR = '';
 let GO_PROXY = '';
 const PIP_TIMEOUT = '120';
 
+// 报告生成相关常量
+const REPORT_DIR_DEFAULT = '/tmp/pre-commit-reports/'; // 各工具扫描报告约定目录（机器临时目录）
+
 function getInput(name) {
-  const val = process.env[`INPUT_${name.toUpperCase()}`] || '';
+  // 兼容连字符与下划线两种命名：report-dir 同时支持 INPUT_REPORT-DIR / INPUT_REPORT_DIR
+  const dashKey = `INPUT_${name.toUpperCase().replace(/-/g, '-')}`;
+  const underscoreKey = `INPUT_${name.toUpperCase().replace(/-/g, '_')}`;
+  const val = process.env[dashKey] || process.env[underscoreKey] || '';
   const trimmed = val.trim();
 
   if (name === 'extra_args' && trimmed) {
@@ -112,6 +50,29 @@ function getInput(name) {
   }
 
   return trimmed;
+}
+
+/** 输出 action output（GitCode STEP_OUTPUT 机制，与 openlibing-upload-sarif 一致） */
+function setOutput(key, value) {
+  const stepOutput = process.env.STEP_OUTPUT;
+  if (!stepOutput) {
+    console.log(`[WARN] STEP_OUTPUT env not set, skip output: ${key}=${value}`);
+    return;
+  }
+  let filePath;
+  try {
+    filePath = fs.statSync(stepOutput).isDirectory() ? path.join(stepOutput, 'output') : stepOutput;
+  } catch (e) {
+    // 文件不存在但父目录有效时按文件路径追加（appendFileSync 自动创建）
+    const parentDir = path.dirname(stepOutput);
+    if (!(fs.existsSync(parentDir) && fs.statSync(parentDir).isDirectory())) {
+      console.log(`[WARN] STEP_OUTPUT path is invalid, skip output: ${key}=${value}`);
+      return;
+    }
+    filePath = stepOutput;
+  }
+  fs.appendFileSync(filePath, `${key}=${value}\n`, 'utf-8');
+  console.log(`[OUTPUT] ${key}=${value}`);
 }
 
 function exec(cmd) {
@@ -230,32 +191,357 @@ function buildAutoArgs() {
   return { type: 'args', args: '--all-files' };
 }
 
-function runPreCommit(cmdResult) {
-  let checkFailed = false;
+/**
+ * 流式执行子进程：实时转发 stdout/stderr 到控制台，同时完整累积输出文本。
+ * 不使用 spawnSync：其默认 maxBuffer 仅 1MB，大型项目（如 C 项目 clang-tidy 全量检查）
+ * 输出超限时会被硬截断并抛 ERR_CHILD_PROCESS_STDIO_MAXBUFFER，导致：
+ *   1) 误判为"钩子安装/环境错误"（sp.error 非空 → failureType=install）；
+ *   2) 日志兜底解析（parsePreCommitLog / generateFallbackSarif）依据缺失。
+ * @param {string} command 可执行文件
+ * @param {string[]} args 命令行参数
+ * @param {object} [options] spawn 选项（如 cwd）
+ * @returns {Promise<{status: (number|null), error: (Error|undefined), output: string}>}
+ */
+function runStreaming(command, args, options = {}) {
+  return new Promise((resolve) => {
+    let output = '';
+    let settled = false;
+    const done = (result) => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
 
+    let sp;
+    try {
+      sp = spawn(command, args, { cwd: options.cwd });
+    } catch (e) {
+      done({ status: null, error: e, output });
+      return;
+    }
+
+    sp.stdout.setEncoding('utf8');
+    sp.stderr.setEncoding('utf8');
+    // 防御：子进程管道异常中断（如被强杀）时流可能触发 error，未监听会抛未捕获异常导致 action 崩溃
+    sp.stdout.on('error', (err) => {
+      console.log(`[WARN] pre-commit 输出流异常（stdout）: ${err.message}`);
+    });
+    sp.stderr.on('error', (err) => {
+      console.log(`[WARN] pre-commit 输出流异常（stderr）: ${err.message}`);
+    });
+    sp.stdout.on('data', (chunk) => {
+      output += chunk;
+      process.stdout.write(chunk);
+    });
+    sp.stderr.on('data', (chunk) => {
+      output += chunk;
+      process.stderr.write(chunk);
+    });
+    sp.on('error', (err) => done({ status: null, error: err, output }));
+    sp.on('close', (code, signal) => {
+      if (code === null && signal) {
+        console.log(`[WARN] pre-commit 子进程被信号终止: ${signal}`);
+      }
+      done({ status: code, error: undefined, output });
+    });
+  });
+}
+
+async function runPreCommit(cmdResult) {
   if (cmdResult.type === 'skip') {
     console.log('[OK] 无需检查');
-    return;
+    return { failed: false, output: '' };
   }
 
-  try {
-    execFile('python', ['-m', 'pre_commit', 'run', ...cmdResult.args.split(' ')]);
-  } catch (e) {
-    checkFailed = true;
-  }
+  // 流式捕获 pre_commit run 的输出（stdout+stderr），实时转发控制台且完整累积，
+  // 供用户未提供 SARIF 时的日志兜底解析；不使用 spawnSync 以免 maxBuffer 截断大输出。
+  const runArgs = cmdResult.type === 'file'
+    ? ['-m', 'pre_commit', 'run', '--files', ...cmdResult.files]
+    : ['-m', 'pre_commit', 'run', ...cmdResult.args.split(' ')];
+  console.log(`> python ${runArgs.join(' ')}`);
 
+  const { status, error, output } = await runStreaming('python', runArgs, { cwd: process.cwd() });
+
+  const checkFailed = status !== 0;
   if (checkFailed) {
-    console.log('[ERROR] pre-commit 检查失败');
+    // 区分"检查出告警"与"钩子安装/环境失败"：
+    //  - 检查出告警：钩子正常运行，输出含标准 "xxx....Failed" 钩子状态行（parsePreCommitLog 可解析出失败钩子）
+    //  - 安装/环境失败：spawn 失败、无失败钩子状态行，或输出含 pre-commit 未预期错误标志
+    const hasFailureHooks = parsePreCommitLog(output).length > 0;
+    const unexpectedError = /An unexpected error has occurred|Failed to install|InstallError|error occurred/i.test(output);
+    const installError = error !== undefined || !hasFailureHooks || unexpectedError;
+
+    if (installError) {
+      console.log('[ERROR] pre-commit 执行失败（钩子安装或环境错误），任务按失败状态退出');
+      console.log('[INFO] 请检查网络连通性、钩子仓库地址（建议 GitCode 镜像仓）、.pre-commit-config.yaml 配置后重试');
+      console.log('      详细错误可查看 pre-commit 日志: ~/.cache/pre-commit/pre-commit.log');
+      console.log('\n如需了解更多 pre-commit 配置等信息，请查阅: https://gitcode.com/openlibing/docs/blob/main/static-code-analysis/solutions/pre-commit/README.md');
+      return { failed: true, output, failureType: 'install' };
+    }
+
+    // 检查出告警（钩子正常运行但发现问题）
+    console.log('[ERROR] pre-commit 检查发现告警');
     console.log('\n[INFO] 请在本地执行以下命令修复后重新提交:');
     console.log('1. 安装/初始化环境');
     console.log('   pip install pre-commit && pre-commit install --install-hooks');
     console.log('2. 检查并修复变更文件');
-    console.log('   pre-commit run --all-files');
+    if (cmdResult.type === 'file') {
+      console.log(`   pre-commit run --files ${cmdResult.files.join(' ')}`);
+    } else {
+      console.log('   pre-commit run --all-files');
+    }
     console.log('\n如需了解更多告警屏蔽、pre-commit配置等信息，请查阅: https://gitcode.com/openlibing/docs/blob/main/static-code-analysis/solutions/pre-commit/README.md');
-    process.exit(1);
+    // 不在此退出：pre-commit 失败时扫描报告同样有价值，报告上传完成后由 run() 统一按失败状态退出
+    return { failed: true, output, failureType: 'check' };
   }
   console.log('[OK] pre-commit 检查通过');
   console.log('如需了解更多告警屏蔽、pre-commit配置等信息，请查阅: https://gitcode.com/openlibing/docs/blob/main/static-code-analysis/solutions/pre-commit/README.md');
+  return { failed: false, output, failureType: 'none' };
+}
+
+/** 解析 pre-commit 运行日志，提取失败的钩子（兜底 SARIF 数据源）。
+ * pre-commit 标准输出格式：
+ *   trailing whitespace.................................................Failed
+ *   - hook id: trailing-whitespace
+ *   - exit code: 1
+ *
+ *     Files were modified by this hook. Additional output:
+ *
+ *     src/foo.py
+ *   detect-secrets-report................................................Passed
+ * @returns {Array<{hookId: string, exitCode: (number|null), message: string, files: string[]}>}
+ */
+function parsePreCommitLog(output) {
+  const failures = [];
+  const lines = String(output || '').split('\n');
+  // hook id 可能含空格（如 "trailing whitespace"），非贪婪捕获 + 至少 3 个点分隔状态
+  const hookLineRe = /^(.+?)\s*\.{3,}\s*(Failed|Passed)\s*$/;
+  // 疑似文件路径：单 token，可带 :line / :line:col 后缀（flake8/eslint 等 "path:1:1: msg" 只取 path 段）
+  const pathLikeRe = /^[^\s:=]+$/;
+
+  let current = null;      // 当前失败的钩子
+  let collecting = false;  // 是否在收集失败钩子的输出块
+
+  for (const line of lines) {
+    const m = line.match(hookLineRe);
+    if (m) {
+      if (m[2] === 'Failed') {
+        current = { hookId: m[1].trim(), exitCode: null, message: '', files: [], lines: [] };
+        failures.push(current);
+      } else {
+        current = null;
+      }
+      collecting = false;
+      continue;
+    }
+    if (!current) continue;
+
+    const hookIdMatch = line.match(/^-\s*hook id:\s*(\S+)/);
+    if (hookIdMatch) {
+      current.hookId = hookIdMatch[1];
+      collecting = true;
+      continue;
+    }
+    const exitMatch = line.match(/^-\s*exit code:\s*(\d+)/);
+    if (exitMatch) {
+      current.exitCode = parseInt(exitMatch[1], 10);
+      continue;
+    }
+    if (!collecting) continue;
+
+    const trimmed = line.trim();
+    if (!trimmed || /^-{3,}$/.test(trimmed)) continue;
+    // 跳过 " - xxx" 元信息行（"- hook id"/"- exit code" 已在上方处理）；但 "--> path:line:col"
+    // 是 rust-clippy 的位置行，以 "-" 开头但属有效输出，需保留
+    if (/^-\s*\S/.test(trimmed) && !trimmed.startsWith('-->')) continue;
+    // 收集输出块原始行（供按工具解析器使用）
+    current.lines.push(trimmed);
+    // detect-secrets 输出 "Filename: .env" → 提取文件（行可能带前导空格，用 trimmed 匹配）
+    const fnMatch = trimmed.match(/^Filename:\s*(\S+)/);
+    if (fnMatch) {
+      if (current.files.length < 50) current.files.push(fnMatch[1]);
+      continue;
+    }
+    // "Files were modified by this hook." / "Additional output:" 等说明行不作为文件，但可作 message 上下文
+    if (pathLikeRe.test(trimmed) && !/^(Files|Additional|All|Total|skipping|Skipping)/i.test(trimmed)) {
+      if (current.files.length < 50) current.files.push(trimmed);
+    } else if (current.message.length === 0) {
+      current.message = trimmed.slice(0, 300);
+    }
+  }
+  return failures;
+}
+
+/** 由 pre-commit 运行日志按工具维度补齐兜底 SARIF 文件，写入报告目录。
+ * 每个失败钩子按规则处理：
+ *   1. 用户已提供该工具 sarif 文件（报告目录中存在 <tool>.sarif）→ 直接使用，跳过日志解析
+ *   2. 未提供，且工具在支持列表（第一批：clang-tidy/bandit/gosec/spotbugs/rust-clippy/eslint/gitleaks/detect-secrets）
+ *      → 解析日志生成 <tool>.sarif
+ *   3. 未提供且不支持 → 不生成报告，仅提示 "<工具> 工具未查询到 sarif 文件，且暂不支持日志自动解析"
+ * @param {string} preCommitOutput pre_commit run 的捕获输出（stdout+stderr）
+ * @param {string[]} [existingSarifNames] 报告目录中已有的 *.sarif 文件名（用户提供的报告）
+ * @returns {string[]} 新生成的兜底文件名数组（可能为空） */
+function generateFallbackSarif(preCommitOutput, existingSarifNames) {
+  const failures = parsePreCommitLog(preCommitOutput);
+  if (failures.length === 0) return [];
+  console.log(`[INFO] pre-commit 日志解析到 ${failures.length} 个失败钩子: ${failures.map(f => f.hookId).join(', ')}`);
+
+  const reportDir = getInput('report-dir') || REPORT_DIR_DEFAULT;
+  // 报告目录可能不存在（纯拦截钩子不生成报告），兜底生成前确保目录可写
+  fs.mkdirSync(reportDir, { recursive: true });
+  const generated = [];
+
+  // 用户已提供的 sarif 文件名集合（小写），用于判断"该工具用户是否已输出 sarif"
+  const existing = new Set((existingSarifNames || []).map(n => String(n).toLowerCase()));
+
+  const writeSarif = (name, sarifObj) => {
+    try {
+      // uri 归一化与代码上下文补齐由 openlibing-upload-sarif 在上传前完成，此处直接写盘
+      fs.writeFileSync(path.join(reportDir, name), JSON.stringify(sarifObj, null, 2), 'utf-8');
+      generated.push(name);
+      return true;
+    } catch (e) {
+      console.log(`[WARN] 生成兜底 SARIF 写入失败 (${name}): ${e.message}`);
+      return false;
+    }
+  };
+
+  for (const f of failures) {
+    const parser = matchToolParser(f.hookId);
+    const toolName = parser ? parser.toolName : String(f.hookId || '').toLowerCase();
+    // 规则1：该工具用户已输出 sarif → 直接使用，跳过日志解析
+    if (existing.has(`${toolName}.sarif`)) {
+      console.log(`[INFO] ${toolName} 已提供 sarif 文件，直接使用: ${toolName}.sarif`);
+      continue;
+    }
+    // 规则2：支持日志解析的工具 → 解析日志生成 <tool>.sarif
+    if (parser) {
+      const findings = parser.parse(f.lines || []);
+      const sarifObj = buildToolSarif(parser.toolName, findings);
+      if (sarifObj) {
+        const name = `${parser.toolName}.sarif`;
+        if (writeSarif(name, sarifObj)) {
+          console.log(`[INFO] 已按 ${parser.toolName} 解析日志生成兜底 SARIF（${findings.length} 条问题）: ${name}`);
+        }
+      } else {
+        console.log(`[WARN] ${parser.toolName} 日志中未解析到可识别的问题条目`);
+      }
+    } else {
+      // 规则3：未提供 sarif 且不支持日志解析 → 仅提示
+      console.log(`[WARN] ${toolName} 工具未查询到 sarif 文件，且暂不支持日志自动解析`);
+    }
+  }
+  return generated;
+}
+
+/** 是否为 PR 类型触发（门禁场景：pre-commit 检查失败必须退出阻塞合并）。
+ * 与 buildAutoArgs 的 PR 判断保持一致。 */
+function isPrEvent() {
+  const eventName = (process.env.ATOMGIT_EVENT_NAME || '').toLowerCase();
+  const baseRef = process.env.ATOMGIT_BASE_REF || '';
+  return (eventName === 'mr' || eventName === 'pull_request' || eventName === 'note') && baseRef;
+}
+
+/** 收集 SARIF 报告：优先收集业务仓转换好的 *.sarif（用户通过 sarif-file / report-dir 提供）；
+ * 若报告目录无 *.sarif，则解析 pre-commit 运行日志生成兜底 SARIF（防止用户未提供报告的场景）。
+ * 只负责生成/归一化报告文件，不做上传回调——上传由 workflow 中 openlibing-upload-sarif 完成。
+ * PR 类型触发（mr / pull_request / note）只做门禁检查，不生成/收集报告。
+ * @param {string} preCommitOutput pre_commit run 的捕获输出（stdout+stderr）
+ * @returns {string[]} 收集到的 SARIF 文件绝对路径数组（可能为空） */
+function collectScanReports(preCommitOutput) {
+  console.log('\n===== [7] 报告收集与兜底生成（上传交由 workflow 中的 openlibing-upload-sarif） =====');
+
+  // PR 场景只做门禁检查，不生成报告（门禁失败退出逻辑在 run() 中处理）
+  if (isPrEvent()) {
+    console.log('[INFO] PR 类型触发，按约定不生成/收集 SARIF 报告，跳过');
+    return [];
+  }
+
+  const reportDir = getInput('report-dir') || REPORT_DIR_DEFAULT;
+  const workspace = process.env.WORKSPACE || process.cwd();
+
+  // 用户提供的报告（绝对路径列表）：
+  //   1) sarif-file 输入：逗号分隔的文件/目录（目录非递归扫描 *.sarif），与 openlibing-upload-sarif 一致
+  //   2) report-dir 目录扫描：向后兼容既有行为
+  const candidatePaths = [];
+  const sarifFileInput = getInput('sarif-file');
+  if (sarifFileInput) {
+    sarifFileInput.split(',').map(s => s.trim()).filter(Boolean).forEach(p => candidatePaths.push(p));
+  }
+  if (fs.existsSync(reportDir)) {
+    fs.readdirSync(reportDir)
+      .filter(f => f.endsWith('.sarif'))
+      .sort()
+      .forEach(f => candidatePaths.push(path.join(reportDir, f)));
+  } else {
+    console.log(`[INFO] 报告目录不存在，尝试从 pre-commit 日志兜底生成: ${reportDir}`);
+  }
+
+  const userSarifFiles = [];
+  const missingPaths = [];
+  for (const rawPath of candidatePaths) {
+    let p = rawPath;
+    if (!fs.existsSync(p)) {
+      const joined = path.join(workspace, rawPath);
+      if (fs.existsSync(joined)) p = joined;
+    }
+    if (!fs.existsSync(p)) {
+      missingPaths.push(rawPath);
+      continue;
+    }
+    if (fs.statSync(p).isDirectory()) {
+      console.log(`[INFO] 输入为目录: ${p}，扫描其中所有 .sarif 文件`);
+      const found = fs.readdirSync(p)
+        .filter(f => f.toLowerCase().endsWith('.sarif'))
+        .map(f => path.join(p, f));
+      if (found.length === 0) console.log(`[WARN] 目录中未找到 .sarif 文件: ${p}`);
+      userSarifFiles.push(...found);
+    } else {
+      userSarifFiles.push(p);
+    }
+  }
+  // 去重（同名文件保留首个）
+  const seen = new Set();
+  const userSarifFilesDedup = userSarifFiles.filter(f => {
+    const key = path.basename(f);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  userSarifFiles.length = 0;
+  userSarifFiles.push(...userSarifFilesDedup);
+  if (missingPaths.length > 0) {
+    // 报告属附加能力，路径缺失不阻断 pre-commit 检查主流程，仅告警
+    console.log(`[WARN] SARIF 路径不存在（已忽略）: ${missingPaths.join(', ')}`);
+  }
+
+  // 按工具维度补齐：失败钩子对应工具已有用户 sarif 直接用；
+  // 未提供且支持日志解析则生成 <tool>.sarif；未提供且不支持则提示。
+  const existingNames = userSarifFiles.map(f => path.basename(f));
+  const fallbackFiles = generateFallbackSarif(preCommitOutput, existingNames);
+  if (fallbackFiles.length > 0) {
+    console.log('[INFO] 已根据 pre-commit 日志生成兜底 SARIF: ' + fallbackFiles.join(', '));
+  }
+
+  // 上传列表 = 用户提供的报告（绝对路径） + 兜底生成的文件（report-dir 下）
+  const uploadFiles = userSarifFiles.map(f => ({ file: f, name: path.basename(f) }));
+  for (const name of fallbackFiles) {
+    uploadFiles.push({ file: path.join(reportDir, name), name });
+  }
+
+  if (uploadFiles.length === 0) {
+    console.log(`[INFO] 无 SARIF 报告可生成（失败钩子工具均未提供 sarif 且不支持日志解析）: ${reportDir}`);
+    return [];
+  }
+
+  // 上传前不做 uri 归一化/代码上下文补齐：由 openlibing-upload-sarif 统一完成，避免双份逻辑
+
+  console.log(`[OK] 收集到 ${uploadFiles.length} 个 SARIF 报告:`);
+  uploadFiles.forEach(u => console.log(`  - ${u.file}`));
+
+  // 返回文件绝对路径列表，供 run() 输出到 sarif-files output，
+  // workflow 中 openlibing-upload-sarif 的 sarif-file input 可直接消费。
+  return uploadFiles.map(u => u.file);
 }
 
 async function run() {
@@ -344,15 +630,478 @@ console.log('\n===== [1] 检查 Python 环境 =====');
   }
 
   console.log('\n===== [6] 运行 pre-commit 检查 =====');
-  runPreCommit(cmdResult);
+  const preCommitResult = await runPreCommit(cmdResult);
+
+  // 收集/兜底生成 SARIF 报告文件（不做上传回调，上传由 workflow 中的 openlibing-upload-sarif 完成）
+  const sarifFiles = collectScanReports(preCommitResult.output);
+  if (sarifFiles.length > 0) {
+    // 输出到 sarif-files，workflow 中 openlibing-upload-sarif 的 sarif-file input 可直接消费
+    setOutput('sarif-files', sarifFiles.join(','));
+  }
+
+  if (preCommitResult.failed) {
+    if (preCommitResult.failureType === 'install') {
+      // 钩子安装/环境失败：任何场景都必须任务失败（不是检查出告警）
+      console.log('[ERROR] pre-commit 钩子安装或环境错误，任务按失败状态退出');
+      process.exit(1);
+    }
+    if (isPrEvent()) {
+      // 门禁场景（PR 增量检查）：检查失败必须退出，阻塞合并
+      console.log('[ERROR] pre-commit 检查失败（门禁），任务按失败状态退出');
+      process.exit(1);
+    } else {
+      // 版本级场景（push / workflow_dispatch / schedule 全量检查）：
+      // 报告文件已生成（sarif-files output），上传与解析由 workflow 负责，检查发现告警仅提示，不按失败退出
+      console.log('[WARN] pre-commit 检查发现告警（版本级），扫描报告已生成，任务不按失败状态退出');
+    }
+  }
 }
 
-run().catch(err => {
-  const sanitizedMessage = sanitizePath(err.message);
-  console.error(`Action 执行失败: ${sanitizedMessage}`);
-  process.exit(1);
-});
+if (require.main === require.cache[eval('__filename')]) {
+  run().catch(err => {
+    const sanitizedMessage = sanitizePath(err.message);
+    console.error(`Action 执行失败: ${sanitizedMessage}`);
+    process.exit(1);
+  });
+}
 
-module.exports = __webpack_exports__;
+module.exports = {
+  run,
+  collectScanReports,
+  parsePreCommitLog,
+  generateFallbackSarif
+};
+
+
+/***/ }),
+
+/***/ 737:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+/**
+ * pre-commit 失败日志按工具解析（兜底 SARIF 数据源）。
+ * 第一批支持：clang-tidy / bandit / gosec / spotbugs / rust-clippy / eslint / gitleaks / detect-secrets。
+ * 每种工具实现一个行解析器：输入失败钩子的输出块行（trimmed 非空），输出结构化 findings。
+ * 供 pre-commit-action 在用户未提供 *.sarif 时生成 <tool>.sarif。
+ */
+
+const crypto = __nccwpck_require__(982);
+
+const LEVEL_ERROR = 'error';
+const LEVEL_WARNING = 'warning';
+const LEVEL_NOTE = 'note';
+
+/** sha256 稳定指纹（后端 StandardSarifParser 用 partialFingerprints.primaryLocationLineHash 构建 fingerprintKey）。 */
+function _locationHash(toolName, ruleId, file, line, column) {
+  const raw = [toolName, ruleId, file || '', line || '', column || ''].join('|');
+  return crypto.createHash('sha256').update(raw, 'utf8').digest('hex');
+}
+
+/** 由 findings 构建 SARIF 2.1.0（rules 去重，每个 finding 一个 result）。 */
+function buildToolSarif(toolName, findings) {
+  const rules = [];
+  const ruleMap = {};
+  const results = [];
+  for (const f of findings) {
+    const ruleId = f.ruleId || toolName;
+    if (!ruleMap[ruleId]) {
+      ruleMap[ruleId] = true;
+      rules.push({
+        id: ruleId,
+        name: ruleId,
+        shortDescription: { text: f.ruleDesc || ruleId },
+        helpUri: f.helpUri || ''
+      });
+    }
+    const region = {};
+    if (f.line) region.startLine = f.line;
+    if (f.column) region.startColumn = f.column;
+    results.push({
+      ruleId,
+      level: f.level || LEVEL_ERROR,
+      message: { text: f.message || ruleId },
+      locations: [{
+        physicalLocation: {
+          artifactLocation: { uri: f.file || toolName },
+          region
+        }
+      }],
+      partialFingerprints: {
+        primaryLocationLineHash: _locationHash(toolName, ruleId, f.file, f.line, f.column)
+      }
+    });
+  }
+  if (rules.length === 0) return null;
+  return {
+    version: '2.1.0',
+    $schema: 'https://json.schemastore.org/sarif-2.1.0.json',
+    runs: [{
+      tool: {
+        driver: {
+          name: toolName,
+          rules
+        }
+      },
+      results
+    }]
+  };
+}
+
+/** clang-tidy：path:line[:col]: warning|error|note: message [rule-id] */
+function parseClangTidy(lines) {
+  const findings = [];
+  // 非贪婪匹配路径段，避免 path:line:col 三段时行号被吞进 file（贪婪会匹配到最后一个冒号前的 ":line"）
+  const re = /^(.+?):(\d+)(?::(\d+))?:\s*(warning|error|note):\s*(.+?)\s*(?:\[([^\]]+)\])?$/;
+  for (const line of lines) {
+    const m = line.match(re);
+    if (!m) continue;
+    const lvl = m[4];
+    findings.push({
+      ruleId: m[6] || 'clang-tidy',
+      ruleDesc: m[6] || 'clang-tidy diagnostic',
+      level: lvl === 'error' ? LEVEL_ERROR : (lvl === 'warning' ? LEVEL_WARNING : LEVEL_NOTE),
+      message: m[5],
+      file: m[1],
+      line: parseInt(m[2], 10),
+      column: m[3] ? parseInt(m[3], 10) : undefined,
+      helpUri: 'https://clang.llvm.org/extra/clang-tidy/'
+    });
+  }
+  return findings;
+}
+
+/** bandit：多行格式（>> Issue / Severity / Location）或单行格式（Issue: [B1xx:id] msg in file x at line n） */
+function parseBandit(lines) {
+  const findings = [];
+  let cur = null;
+  for (const line of lines) {
+    let m = line.match(/^>>\s*Issue:\s*\[([A-Z]\d+):([\w\-]+)\]\s*(.+)$/);
+    if (m) {
+      cur = { ruleId: m[1], ruleDesc: m[2], message: m[3], severity: '' };
+      findings.push(cur);
+      continue;
+    }
+    if (!cur) continue;
+    m = line.match(/^Severity:\s*(\w+)/);
+    if (m) { cur.severity = m[1]; continue; }
+    m = line.match(/^Location:\s*(.+?):(\d+)(?::(\d+))?$/);
+    if (m) {
+      cur.file = m[1];
+      cur.line = parseInt(m[2], 10);
+      cur.column = m[3] ? parseInt(m[3], 10) : undefined;
+      continue;
+    }
+  }
+  // 单行格式
+  for (const line of lines) {
+    const m = line.match(/^Issue:\s*\[([A-Z]\d+):([\w\-]+)\]\s*(.+?)\s+in file\s+(\S+)\s+at line\s+(\d+)/);
+    if (m) {
+      findings.push({
+        ruleId: m[1],
+        ruleDesc: m[2],
+        message: m[3],
+        severity: '',
+        file: m[4],
+        line: parseInt(m[5], 10)
+      });
+    }
+  }
+  return findings.map(f => ({
+    ...f,
+    level: f.severity === 'High' ? LEVEL_ERROR : LEVEL_WARNING,
+    helpUri: 'https://bandit.readthedocs.io/'
+  }));
+}
+
+/** gosec：[path:line] - GXXX: message (Confidence: X, Severity: X) */
+function parseGosec(lines) {
+  const findings = [];
+  const re = /^\[(.+):(\d+)\]\s*-\s*([A-Z]\d+):\s*(.+?)\s*\(Confidence: \w+, Severity: (\w+)\)/;
+  for (const line of lines) {
+    const m = line.match(re);
+    if (!m) continue;
+    const severity = m[5];
+    findings.push({
+      ruleId: m[3],
+      ruleDesc: m[3],
+      message: m[4],
+      level: severity === 'MEDIUM' || severity === 'HIGH' ? LEVEL_ERROR : LEVEL_WARNING,
+      file: m[1],
+      line: parseInt(m[2], 10),
+      helpUri: 'https://github.com/securego/gosec'
+    });
+  }
+  return findings;
+}
+
+/** SpotBugs（-textui 默认格式）：H|M|L CATEGORY TYPE: message  In class X  In method Y  At File.java:[line n] */
+function parseSpotbugs(lines) {
+  const findings = [];
+  // 格式：M DLS_DEAD_LOCAL_STORE: message  In class Foo  In method bar  At Foo.java:[line 10]
+  const re = /^([HML])\s+([\w\.]+):\s*(.+?)\s+In class\s+(\S+)\s+In method\s+(.+?)\s+At\s+(\S+):\[line\s+(\d+)(?:-(\d+))?\]/;
+  for (const line of lines) {
+    const m = line.match(re);
+    if (!m) continue;
+    findings.push({
+      ruleId: m[2],
+      ruleDesc: m[2],
+      message: m[3],
+      level: m[1] === 'H' ? LEVEL_ERROR : LEVEL_WARNING,
+      file: m[6],
+      line: parseInt(m[7], 10),
+      helpUri: 'https://spotbugs.readthedocs.io/'
+    });
+  }
+  return findings;
+}
+
+/** rust-clippy（cargo clippy 格式）：warning|error: message + "  --> path:line:col" + "= note: `#[warn(clippy::x)]`" */
+function parseClippy(lines) {
+  const findings = [];
+  let cur = null;
+  const startRe = /^(warning|error|note):\s*(.+)$/;
+  const locRe = /^-->\s*(.+):(\d+):(\d+)/;
+  const noteRe = /^= note:\s*`#\[warn\(([\w:]+)\)\]/;
+  for (const line of lines) {
+    const m = line.match(startRe);
+    if (m) {
+      cur = {
+        ruleId: 'clippy',
+        ruleDesc: 'clippy lint',
+        message: m[2],
+        level: m[1] === 'error' ? LEVEL_ERROR : (m[1] === 'warning' ? LEVEL_WARNING : LEVEL_NOTE)
+      };
+      findings.push(cur);
+      continue;
+    }
+    if (!cur) continue;
+    const nm = line.match(noteRe);
+    if (nm) { cur.ruleId = nm[1]; cur.ruleDesc = nm[1]; continue; }
+    const lm = line.match(locRe);
+    if (lm) {
+      cur.file = lm[1];
+      cur.line = parseInt(lm[2], 10);
+      cur.column = parseInt(lm[3], 10);
+    }
+  }
+  return findings.map(f => ({ ...f, helpUri: 'https://rust-lang.github.io/rust-clippy/' }));
+}
+
+/** ESLint（stylish 格式）：文件头行 + "  line:col  error|warning  message  rule-id" */
+function parseEslint(lines) {
+  const findings = [];
+  let currentFile = '';
+  const resultRe = /^\s*(\d+):(\d+)\s+(error|warning)\s+(.+?)\s+([\w\-\.\/\\@]+)\s*$/;
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    const m = line.match(resultRe);
+    if (m) {
+      findings.push({
+        ruleId: m[5],
+        ruleDesc: m[5],
+        message: m[4],
+        level: m[3] === 'error' ? LEVEL_ERROR : LEVEL_WARNING,
+        file: currentFile,
+        line: parseInt(m[1], 10),
+        column: parseInt(m[2], 10),
+        helpUri: 'https://eslint.org/'
+      });
+      continue;
+    }
+    // 文件头：非结果行、非统计行（如 "✖ 2 problems" / "N problems"）、非缩进行
+    if (!/^\s*\d+:\d+/.test(line) && !/^✖/.test(line) && !/^\d+\s+problems/.test(line) && !line.startsWith(' ')) {
+      currentFile = line.trim();
+    }
+  }
+  return findings;
+}
+
+/** gitleaks：单行 "○  [rule] msg in file:line" 或多行 Finding（RuleID/File/Line/Secret/Description） */
+function parseGitleaks(lines) {
+  const findings = [];
+  const singleRe = /^○\s*\[([\w\-]+)\]\s*(.+?)\s+in\s+(\S+):(\d+)/;
+  let cur = null;
+  for (const line of lines) {
+    const m = line.match(singleRe);
+    if (m) {
+      findings.push({
+        ruleId: m[1],
+        ruleDesc: m[1],
+        message: m[2],
+        level: LEVEL_ERROR,
+        file: m[3],
+        line: parseInt(m[4], 10)
+      });
+      cur = null;
+      continue;
+    }
+    let f = line.match(/^RuleID:\s*(\S+)/);
+    if (f) {
+      cur = { ruleId: f[1], ruleDesc: f[1], message: '', level: LEVEL_ERROR };
+      findings.push(cur);
+      continue;
+    }
+    if (!cur) continue;
+    f = line.match(/^(File|Line|Secret|Finding|Description|Match):\s*(.+)/);
+    if (f) {
+      const k = f[1];
+      const v = f[2].trim();
+      if (k === 'File') cur.file = v;
+      else if (k === 'Line') cur.line = parseInt(v, 10);
+      else if (k === 'Secret' || k === 'Match') cur.message = (cur.message ? cur.message + ' ' : '') + v.slice(0, 60);
+      else if (k === 'Description' || k === 'Finding') cur.message = cur.message || v;
+    }
+  }
+  return findings.map(f => ({ ...f, helpUri: 'https://github.com/gitleaks/gitleaks' }));
+}
+
+/** detect-secrets（detect-secrets-hook 输出）："Secret Type: X" + "Location:    file:line" 成对格式 */
+function parseDetectSecrets(lines) {
+  const findings = [];
+  let cur = null;
+  const typeRe = /^Secret Type:\s*(.+)$/;
+  const locRe = /^Location:\s*(\S+):(\d+)(?::(\d+))?/;
+  for (const line of lines) {
+    const m = line.match(typeRe);
+    if (m) {
+      const type = m[1].trim();
+      cur = {
+        ruleId: type,
+        ruleDesc: type,
+        message: `Potential secret detected: ${type}`,
+        level: LEVEL_ERROR
+      };
+      findings.push(cur);
+      continue;
+    }
+    if (!cur) continue;
+    const lm = line.match(locRe);
+    if (lm) {
+      cur.file = lm[1];
+      cur.line = parseInt(lm[2], 10);
+      cur.column = lm[3] ? parseInt(lm[3], 10) : undefined;
+    }
+  }
+  return findings.map(f => ({ ...f, helpUri: 'https://github.com/Yelp/detect-secrets' }));
+}
+
+/** 工具映射表：hook id（小写）→ 解析器。 */
+const TOOL_PARSERS = [
+  { toolName: 'clang-tidy', hooks: ['clang-tidy', 'clang_tidy'], parse: parseClangTidy },
+  { toolName: 'bandit', hooks: ['bandit'], parse: parseBandit },
+  { toolName: 'gosec', hooks: ['gosec'], parse: parseGosec },
+  { toolName: 'spotbugs', hooks: ['spotbugs', 'spot-bugs'], parse: parseSpotbugs },
+  { toolName: 'rust-clippy', hooks: ['rust-clippy', 'rust_clippy', 'clippy'], parse: parseClippy },
+  { toolName: 'eslint', hooks: ['eslint'], parse: parseEslint },
+  { toolName: 'gitleaks', hooks: ['gitleaks'], parse: parseGitleaks },
+  { toolName: 'detect-secrets', hooks: ['detect-secrets', 'detect-secrets-report'], parse: parseDetectSecrets }
+];
+
+/** 按失败钩子 id 匹配工具解析器；未支持的工具返回 null。 */
+function matchToolParser(hookId) {
+  const id = String(hookId || '').toLowerCase();
+  for (const t of TOOL_PARSERS) {
+    if (t.hooks.includes(id)) return t;
+  }
+  return null;
+}
+
+module.exports = {
+  buildToolSarif,
+  matchToolParser,
+  parseClangTidy,
+  parseBandit,
+  parseGosec,
+  parseSpotbugs,
+  parseClippy,
+  parseEslint,
+  parseGitleaks,
+  parseDetectSecrets,
+  TOOL_PARSERS
+};
+
+
+/***/ }),
+
+/***/ 317:
+/***/ ((module) => {
+
+"use strict";
+module.exports = require("child_process");
+
+/***/ }),
+
+/***/ 982:
+/***/ ((module) => {
+
+"use strict";
+module.exports = require("crypto");
+
+/***/ }),
+
+/***/ 896:
+/***/ ((module) => {
+
+"use strict";
+module.exports = require("fs");
+
+/***/ }),
+
+/***/ 928:
+/***/ ((module) => {
+
+"use strict";
+module.exports = require("path");
+
+/***/ })
+
+/******/ 	});
+/************************************************************************/
+/******/ 	// The module cache
+/******/ 	var __webpack_module_cache__ = {};
+/******/ 	
+/******/ 	// The require function
+/******/ 	function __nccwpck_require__(moduleId) {
+/******/ 		// Check if module is in cache
+/******/ 		var cachedModule = __webpack_module_cache__[moduleId];
+/******/ 		if (cachedModule !== undefined) {
+/******/ 			return cachedModule.exports;
+/******/ 		}
+/******/ 		// Create a new module (and put it into the cache)
+/******/ 		var module = __webpack_module_cache__[moduleId] = {
+/******/ 			// no module.id needed
+/******/ 			// no module.loaded needed
+/******/ 			exports: {}
+/******/ 		};
+/******/ 	
+/******/ 		// Execute the module function
+/******/ 		var threw = true;
+/******/ 		try {
+/******/ 			__webpack_modules__[moduleId](module, module.exports, __nccwpck_require__);
+/******/ 			threw = false;
+/******/ 		} finally {
+/******/ 			if(threw) delete __webpack_module_cache__[moduleId];
+/******/ 		}
+/******/ 	
+/******/ 		// Return the exports of the module
+/******/ 		return module.exports;
+/******/ 	}
+/******/ 	
+/************************************************************************/
+/******/ 	/* webpack/runtime/compat */
+/******/ 	
+/******/ 	if (typeof __nccwpck_require__ !== 'undefined') __nccwpck_require__.ab = __dirname + "/";
+/******/ 	
+/************************************************************************/
+/******/ 	
+/******/ 	// startup
+/******/ 	// Load entry module and return exports
+/******/ 	// This entry module is referenced by other modules so it can't be inlined
+/******/ 	var __webpack_exports__ = __nccwpck_require__(136);
+/******/ 	module.exports = __webpack_exports__;
+/******/ 	
 /******/ })()
 ;
