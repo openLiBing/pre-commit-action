@@ -106,7 +106,7 @@ function parseBandit(lines) {
     if (!cur) continue;
     m = line.match(/^Severity:\s*(\w+)/);
     if (m) { cur.severity = m[1]; continue; }
-    m = line.match(/^Location:\s*(.+):(\d+)(?::(\d+))?/);
+    m = line.match(/^Location:\s*(.+?):(\d+)(?::(\d+))?$/);
     if (m) {
       cur.file = m[1];
       cur.line = parseInt(m[2], 10);
