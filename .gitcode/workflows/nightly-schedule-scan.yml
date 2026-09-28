@@ -47,6 +47,9 @@ stages:
           - name: Install SARIF formatter
             run: npm install --no-save @microsoft/eslint-formatter-sarif@3.1.0
 
+          - name: Print callback repository URL
+            run: echo "ATOMGIT_REPOSITORY_URL=${ATOMGIT_REPOSITORY_URL}"
+
           - name: Create report directory
             run: mkdir -p ./tmp_pre-commit-reports/
 
