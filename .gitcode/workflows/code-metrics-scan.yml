@@ -20,4 +20,4 @@ jobs:
 
       # 插件使用 OIDC 联邦认证上传（无需凭证），permissions: id-token: write 已声明
       - name: code-metrics-scan
-        uses: openlibing/code-metrics-action@f3ae3ad144585ec83abc9f4929533300cdd2a473
+        uses: openlibing/code-metrics-action@039eaa86fc8be990d65a23ea2c74bd11a3d14f68
