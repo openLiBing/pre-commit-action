@@ -4,9 +4,6 @@ on:
   schedule:
     - cron: "0 0 3 * * ?"
   workflow_dispatch:
-  # 验证用：合入默认分支前临时触发，通过后删除
-  push:
-    branches: [full-check-update]
 
 permissions:
   repository: read
@@ -25,8 +22,7 @@ stages:
             uses: checkout
             with:
               token: ${{ secrets.ROBOT_TOKEN }}
-              # 验证期间检出本次推送；写死 master 会扫到尚未包含 eslint-sarif 的默认分支
-              ref: ${{ atomgit.sha }}
+              ref: master
 
           - name: setup-go
             uses: setup-go
