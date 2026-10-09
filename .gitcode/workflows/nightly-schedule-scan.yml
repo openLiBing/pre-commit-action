@@ -4,6 +4,9 @@ on:
   schedule:
     - cron: "0 0 3 * * ?"
   workflow_dispatch:
+  # 验证用：合入默认分支前临时触发，通过后删除
+  push:
+    branches: [full-check-update]
 
 permissions:
   repository: read
@@ -41,12 +44,6 @@ stages:
 
           - name: setup-prettier
             run: npm install --save-dev --save-exact prettier@3.9.5
-
-          - name: Install SARIF formatter
-            run: npm install --no-save @microsoft/eslint-formatter-sarif@3.1.0
-
-          - name: Create report directory
-            run: mkdir -p ./tmp_pre-commit-reports/
 
           - name: run pre-commit
             id: pre-commit
