@@ -25,7 +25,8 @@ stages:
             uses: checkout
             with:
               token: ${{ secrets.ROBOT_TOKEN }}
-              ref: master
+              # 验证期间检出本次推送；写死 master 会扫到尚未包含 eslint-sarif 的默认分支
+              ref: ${{ atomgit.sha }}
 
           - name: setup-go
             uses: setup-go
