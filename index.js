@@ -538,9 +538,34 @@ function collectScanReports(preCommitOutput) {
   return uploadFiles.map(u => u.file);
 }
 
+/** 临时报告目录清理（Ref issue #17）：默认报告目录位于机器临时目录（/tmp/pre-commit-reports/），
+ * 任务结束后不应残留（兜底报告中可能含检出 secret 明文）。
+ * 注册 process exit 钩子——包括 process.exit(1) 失败退出路径在内统一兜底；
+ * 是否清理由 cleanupState.clean 决定：成功路径生成了 SARIF 报告时保留目录，
+ * 报告文件需存活到 workflow 后续 openlibing-upload-sarif 消费；其余场景
+ * （门禁失败 / 钩子环境失败 / 未生成报告）一律清理。
+ * 用户通过 report-dir 显式指定的目录视为业务资产，不在清理范围（本函数只处理默认目录）。 */
+function registerTmpReportCleanup(cleanupState) {
+  process.on('exit', () => {
+    if (!cleanupState.clean) return;
+    try {
+      if (fs.existsSync(REPORT_DIR_DEFAULT)) {
+        fs.rmSync(REPORT_DIR_DEFAULT, { recursive: true, force: true });
+        console.log(`[INFO] 已清理临时报告目录: ${REPORT_DIR_DEFAULT}`);
+      }
+    } catch (e) {
+      console.log(`[WARN] 清理临时报告目录失败: ${e.message}`);
+    }
+  });
+}
+
 async function run() {
   const extraArgs = getInput('extra_args');
   console.log('===== pre-commit-action 启动 =====');
+
+  // Ref issue #17：临时报告目录生命周期管理，各退出路径由 exit 钩子统一兜底清理
+  const cleanupState = { clean: true };
+  registerTmpReportCleanup(cleanupState);
 
 console.log('\n===== [1] 检查 Python 环境 =====');
   execFile('python', ['--version']);
@@ -631,6 +656,8 @@ console.log('\n===== [1] 检查 Python 环境 =====');
   if (sarifFiles.length > 0) {
     // 输出到 sarif-files，workflow 中 openlibing-upload-sarif 的 sarif-file input 可直接消费
     setOutput('sarif-files', sarifFiles.join(','));
+    // 报告文件需存活到 workflow 后续 openlibing-upload-sarif 消费，退出时保留报告目录
+    cleanupState.clean = false;
   }
 
   if (preCommitResult.failed) {
