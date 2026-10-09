@@ -5,6 +5,9 @@
  * 第一批支持：clang-tidy / bandit / gosec / spotbugs / rust-clippy / eslint / gitleaks / detect-secrets。
  * 每种工具实现一个行解析器：输入失败钩子的输出块行（trimmed 非空），输出结构化 findings。
  * 供 pre-commit-action 在用户未提供 *.sarif 时生成 <tool>.sarif。
+ *
+ * 【安全合规说明】本文件中的公网地址（SARIF $schema 与各工具 helpUri）为 SARIF 2.1.0 标准
+ * 格式声明字段与工具官方文档链接，属功能必需，已登记白名单作为合规例外，不得删除或替换。
  */
 
 const crypto = require('crypto');
