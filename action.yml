@@ -1,5 +1,5 @@
 name: "pre-commit-action"
-version: 1.0.40
+version: 1.0.3
 author: "test-devops"
 description: "安装 pre-commit 并对代码仓库执行钩子检查"
 
