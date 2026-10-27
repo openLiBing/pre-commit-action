@@ -54,10 +54,6 @@ inputs:
         required_message: ""
 
 outputs:
-  result:
-    description: "pre-commit 运行结果：success 或 failed"
-  checked_files:
-    description: "pre-commit 检查的文件范围"
   sarif-files:
     description: "收集/兜底生成的 SARIF 文件绝对路径列表（逗号分隔，可空）。可直接传给 openlibing-upload-sarif 的 sarif-file input 完成上传"
 
