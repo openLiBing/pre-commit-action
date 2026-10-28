@@ -36,14 +36,17 @@ PR 增量检查流程：
 
 插件安装 pre-commit 及各语言钩子依赖时需要访问 PyPI / Go module proxy。**未配置镜像时回退官方源**（pypi.org / proxy.golang.org），功能可用但速度极慢，慢网/内网 runner 可能明显变慢甚至超时。实测数据（未配置镜像、走 PyPI 官方源）：`virtualenv` 单包 5.6MB 下载速率约 30 KB/s、耗时 3 分 52 秒，整个 job 约 6 分钟。
 
-| 环境变量           | 作用                                   | 推荐值（华为云镜像）                                      | 未配置时回退     |
-| ------------------ | -------------------------------------- | --------------------------------------------------------- | ---------------- |
-| PIP_MIRROR_DEFAULT | pip 安装 pre-commit 及 Python 钩子依赖 | `https://mirrors.huaweicloud.com/repository/pypi/simple`  | pypi.org 官方源  |
-| GO_PROXY_DEFAULT   | Go 语言钩子依赖下载代理                | `https://mirrors.huaweicloud.com/repository/goproxy/`     | proxy.golang.org |
+| 环境变量           | 作用                                   | 推荐值（华为云镜像）                                     | 未配置时回退     |
+| ------------------ | -------------------------------------- | -------------------------------------------------------- | ---------------- |
+| PIP_MIRROR_DEFAULT | pip 安装 pre-commit 及 Python 钩子依赖 | `https://mirrors.huaweicloud.com/repository/pypi/simple` | pypi.org 官方源  |
+| GO_PROXY_DEFAULT   | Go 语言钩子依赖下载代理                | `https://mirrors.huaweicloud.com/repository/goproxy/`    | proxy.golang.org |
 
 在 workflow 的 step `env` 块中注入（只需在本插件步骤生效，不污染其他步骤）：
 
 ```yaml
+jobs:
+  pre-commit:
+    steps:
       - name: run pre-commit
         uses: openlibing/pre-commit-action@v1.0.3
         env:
