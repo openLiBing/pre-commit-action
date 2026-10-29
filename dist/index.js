@@ -1,13 +1,14 @@
 /******/ (() => { // webpackBootstrap
 /******/ 	var __webpack_modules__ = ({
 
-/***/ 136:
+/***/ 910:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 const { execSync, execFileSync, spawn } = __nccwpck_require__(317);
 const fs = __nccwpck_require__(896);
+const os = __nccwpck_require__(857);
 const path = __nccwpck_require__(928);
-const { buildToolSarif, matchToolParser } = __nccwpck_require__(737);
+const { buildToolSarif, matchToolParser } = __nccwpck_require__(967);
 
 const PIP_MIRROR_DEFAULT = 'https://mirrors.huaweicloud.com/repository/pypi/simple';
 const GO_PROXY_DEFAULT = 'https://mirrors.huaweicloud.com/repository/goproxy/';
@@ -82,7 +83,10 @@ function exec(cmd) {
 
 function execFile(cmd, args, options = {}) {
   console.log(`> ${cmd} ${args.join(' ')}`);
-  execFileSync(cmd, args, { stdio: 'inherit', cwd: options.cwd });
+  const spawnOptions = { stdio: 'inherit', cwd: options.cwd };
+  // 仅在显式传入时覆盖 env（token 经环境变量传递给子进程，不在命令行参数中出现）
+  if (options.env) spawnOptions.env = options.env;
+  execFileSync(cmd, args, spawnOptions);
 }
 
 function sanitizePath(pathStr) {
@@ -162,6 +166,37 @@ function detectMirrorConfig() {
   }
 }
 
+/** 为 git fetch 生成 GIT_ASKPASS 凭证脚本。
+ * 脚本写在系统临时目录（不在被检仓工作区），token 经环境变量 PRE_COMMIT_GC_TOKEN
+ * 传递给 askpass 子进程，不出现在任何进程命令行参数（SENS-01），
+ * 也不写入被检仓 .git/config（SENS-03 / SENS-14）。
+ * @param {string} token 用户凭证
+ * @returns {(string|null)} askpass 脚本绝对路径；token 为空时返回 null */
+function createGitAskpass(token) {
+  if (!token) return null;
+  const scriptPath = path.join(os.tmpdir(), `gc-askpass-${process.pid}.sh`);
+  const scriptContent = [
+    '#!/bin/sh',
+    'case "$1" in',
+    '  Username*) echo "oauth2" ;;',
+    '  *) echo "$PRE_COMMIT_GC_TOKEN" ;;',
+    'esac',
+    ''
+  ].join('\n');
+  fs.writeFileSync(scriptPath, scriptContent, { mode: 0o700 });
+  return scriptPath;
+}
+
+/** 删除 GIT_ASKPASS 凭证脚本（任务结束立即清理，避免临时残留）。 */
+function removeGitAskpass(scriptPath) {
+  if (!scriptPath) return;
+  try {
+    fs.rmSync(scriptPath, { force: true });
+  } catch (e) {
+    console.log(`[WARN] 清理 GIT_ASKPASS 脚本失败: ${sanitizePath(String(scriptPath))}`);
+  }
+}
+
 function buildAutoArgs() {
   const eventName = (process.env.ATOMGIT_EVENT_NAME || '').toLowerCase();
   const baseRef = process.env.ATOMGIT_BASE_REF || '';
@@ -170,19 +205,23 @@ function buildAutoArgs() {
   if ((eventName === 'mr' || eventName === 'pull_request' || eventName === 'note') && baseRef) {
     console.log(`[INFO] 检测到 PR 事件，目标分支: ${baseRef}`);
 
-    // 使用 gc_token 注入 remote URL 认证，确保 git fetch 能访问私有仓库
+    // 使用 GIT_ASKPASS 注入凭证（替代原 git remote set-url 方案）：
+    //  - token 经环境变量传递，进程 argv 不含明文（SENS-01）
+    //  - 不修改 remote URL，token 不持久化到被检仓 .git/config，工作区无凭证残留（SENS-03 / SENS-14）
     const token = getInput('gc_token');
-    if (token) {
-      const remoteUrl = execCapture(['git', 'remote', 'get-url', 'origin']);
-      if (remoteUrl && remoteUrl.startsWith('https://')) {
-        const encodedToken = encodeURIComponent(token);
-        const authUrl = remoteUrl.replace('https://', `https://oauth2:${encodedToken}@`);
-        execCapture(['git', 'remote', 'set-url', 'origin', authUrl]);
-      }
-    }
+    const askpassScript = createGitAskpass(token);
 
     console.log(`[INFO] 拉取目标分支 origin/${baseRef} 以获取增量文件`);
-    execFile('git', ['fetch', 'origin', baseRef]);
+    try {
+      execFile('git', ['fetch', 'origin', baseRef], {
+        env: askpassScript
+          ? { ...process.env, GIT_ASKPASS: askpassScript, PRE_COMMIT_GC_TOKEN: token, GIT_TERMINAL_PROMPT: '0' }
+          : process.env
+      });
+    } finally {
+      // 无论 fetch 成功与否都立即清理凭证脚本，缩小 token 暂存时间窗
+      removeGitAskpass(askpassScript);
+    }
 
     console.log(`[INFO] 使用 --from-ref FETCH_HEAD --to-ref HEAD 增量检查`);
     return { type: 'args', args: `--from-ref FETCH_HEAD --to-ref HEAD` };
@@ -680,7 +719,7 @@ module.exports = {
 
 /***/ }),
 
-/***/ 737:
+/***/ 967:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
@@ -1055,6 +1094,14 @@ module.exports = require("fs");
 
 /***/ }),
 
+/***/ 857:
+/***/ ((module) => {
+
+"use strict";
+module.exports = require("os");
+
+/***/ }),
+
 /***/ 928:
 /***/ ((module) => {
 
@@ -1105,7 +1152,7 @@ module.exports = require("path");
 /******/ 	// startup
 /******/ 	// Load entry module and return exports
 /******/ 	// This entry module is referenced by other modules so it can't be inlined
-/******/ 	var __webpack_exports__ = __nccwpck_require__(136);
+/******/ 	var __webpack_exports__ = __nccwpck_require__(910);
 /******/ 	module.exports = __webpack_exports__;
 /******/ 	
 /******/ })()
