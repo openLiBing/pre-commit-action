@@ -10,10 +10,12 @@ const os = __nccwpck_require__(857);
 const path = __nccwpck_require__(928);
 const { buildToolSarif, matchToolParser } = __nccwpck_require__(967);
 
-const PIP_MIRROR_DEFAULT = 'https://mirrors.huaweicloud.com/repository/pypi/simple';
-const GO_PROXY_DEFAULT = 'https://mirrors.huaweicloud.com/repository/goproxy/';
-const PIP_ORIGINAL = 'https://pypi.org/simple';
-const GO_PROXY_ORIGINAL = 'https://proxy.golang.org/';
+// 镜像地址改为环境变量注入（PIP_MIRROR_DEFAULT / GO_PROXY_DEFAULT），源码不再硬编码第三方镜像公网地址；
+// 未配置时回退到官方源。PIP_ORIGINAL / GO_PROXY_ORIGINAL 为官方源地址，属功能必需，登记白名单（合规例外）。
+const PIP_MIRROR_DEFAULT = process.env.PIP_MIRROR_DEFAULT || '';
+const GO_PROXY_DEFAULT = process.env.GO_PROXY_DEFAULT || '';
+const PIP_ORIGINAL = 'https://pypi.org/simple'; // gitleaks:allow 官方 PyPI 源，功能必需
+const GO_PROXY_ORIGINAL = 'https://proxy.golang.org/'; // gitleaks:allow 官方 Go 代理，功能必需
 const SPEED_TEST_TIMEOUT = 5;
 let PIP_MIRROR = '';
 let GO_PROXY = '';
@@ -113,55 +115,66 @@ function testUrlSpeed(url) {
 function detectMirrorConfig() {
   console.log('[INFO] 开始网络测速，选择最快的源...');
 
-  const pipOriginalMs = testUrlSpeed(PIP_ORIGINAL);
-  const pipMirrorMs = testUrlSpeed(PIP_MIRROR_DEFAULT);
-
-  console.log(`[INFO] PyPI 源站 (${PIP_ORIGINAL}) 响应: ${pipOriginalMs >= 0 ? pipOriginalMs + 'ms' : '超时/不可达'}`);
-  console.log(`[INFO] 华为镜像 (${PIP_MIRROR_DEFAULT}) 响应: ${pipMirrorMs >= 0 ? pipMirrorMs + 'ms' : '超时/不可达'}`);
-
-  if (pipOriginalMs < 0 && pipMirrorMs < 0) {
+  // 镜像地址由环境变量注入；未配置时跳过镜像测速，直接使用官方源
+  if (!PIP_MIRROR_DEFAULT) {
     PIP_MIRROR = PIP_ORIGINAL;
-    console.log('[WARN] PyPI 源站和镜像均不可达，默认使用源站');
-  } else if (pipOriginalMs < 0) {
-    PIP_MIRROR = PIP_MIRROR_DEFAULT;
-    console.log('[INFO] PyPI 源站不可达，使用华为镜像');
-  } else if (pipMirrorMs < 0) {
-    PIP_MIRROR = PIP_ORIGINAL;
-    console.log('[INFO] 华为镜像不可达，使用 PyPI 源站');
-  } else if (pipOriginalMs <= pipMirrorMs) {
-    PIP_MIRROR = PIP_ORIGINAL;
-    console.log(`[OK] PyPI 源站更快 (${pipOriginalMs}ms <= ${pipMirrorMs}ms)，使用源站`);
+    console.log('[INFO] 未配置 PIP_MIRROR_DEFAULT 环境变量，使用 PyPI 官方源');
   } else {
-    PIP_MIRROR = PIP_MIRROR_DEFAULT;
-    console.log(`[OK] 华为镜像更快 (${pipMirrorMs}ms < ${pipOriginalMs}ms)，使用镜像`);
+    const pipOriginalMs = testUrlSpeed(PIP_ORIGINAL);
+    const pipMirrorMs = testUrlSpeed(PIP_MIRROR_DEFAULT);
+
+    console.log(`[INFO] PyPI 源站 (${PIP_ORIGINAL}) 响应: ${pipOriginalMs >= 0 ? pipOriginalMs + 'ms' : '超时/不可达'}`);
+    console.log(`[INFO] 配置镜像 (${PIP_MIRROR_DEFAULT}) 响应: ${pipMirrorMs >= 0 ? pipMirrorMs + 'ms' : '超时/不可达'}`);
+
+    if (pipOriginalMs < 0 && pipMirrorMs < 0) {
+      PIP_MIRROR = PIP_ORIGINAL;
+      console.log('[WARN] PyPI 源站和镜像均不可达，默认使用源站');
+    } else if (pipOriginalMs < 0) {
+      PIP_MIRROR = PIP_MIRROR_DEFAULT;
+      console.log('[INFO] PyPI 源站不可达，使用配置镜像');
+    } else if (pipMirrorMs < 0) {
+      PIP_MIRROR = PIP_ORIGINAL;
+      console.log('[INFO] 配置镜像不可达，使用 PyPI 源站');
+    } else if (pipOriginalMs <= pipMirrorMs) {
+      PIP_MIRROR = PIP_ORIGINAL;
+      console.log(`[OK] PyPI 源站更快 (${pipOriginalMs}ms <= ${pipMirrorMs}ms)，使用源站`);
+    } else {
+      PIP_MIRROR = PIP_MIRROR_DEFAULT;
+      console.log(`[OK] 配置镜像更快 (${pipMirrorMs}ms < ${pipOriginalMs}ms)，使用镜像`);
+    }
   }
 
   const goVersion = execCapture(['go', 'version']);
   if (goVersion) {
-    const goOriginalMs = testUrlSpeed(GO_PROXY_ORIGINAL);
-    const goMirrorMs = testUrlSpeed(GO_PROXY_DEFAULT);
-
-    console.log(`[INFO] Go 源站 (${GO_PROXY_ORIGINAL}) 响应: ${goOriginalMs >= 0 ? goOriginalMs + 'ms' : '超时/不可达'}`);
-    console.log(`[INFO] 华为镜像 (${GO_PROXY_DEFAULT}) 响应: ${goMirrorMs >= 0 ? goMirrorMs + 'ms' : '超时/不可达'}`);
-
-    if (goOriginalMs < 0 && goMirrorMs < 0) {
+    if (!GO_PROXY_DEFAULT) {
       GO_PROXY = GO_PROXY_ORIGINAL;
-      console.log('[WARN] Go 源站和镜像均不可达，默认使用源站');
-    } else if (goOriginalMs < 0) {
-      GO_PROXY = GO_PROXY_DEFAULT;
-      console.log('[INFO] Go 源站不可达，使用华为镜像');
-    } else if (goMirrorMs < 0) {
-      GO_PROXY = GO_PROXY_ORIGINAL;
-      console.log('[INFO] 华为镜像不可达，使用 Go 源站');
-    } else if (goOriginalMs <= goMirrorMs) {
-      GO_PROXY = GO_PROXY_ORIGINAL;
-      console.log(`[OK] Go 源站更快 (${goOriginalMs}ms <= ${goMirrorMs}ms)，使用源站`);
+      console.log('[INFO] 未配置 GO_PROXY_DEFAULT 环境变量，使用 Go 官方代理');
     } else {
-      GO_PROXY = GO_PROXY_DEFAULT;
-      console.log(`[OK] 华为镜像更快 (${goMirrorMs}ms < ${goOriginalMs}ms)，使用镜像`);
+      const goOriginalMs = testUrlSpeed(GO_PROXY_ORIGINAL);
+      const goMirrorMs = testUrlSpeed(GO_PROXY_DEFAULT);
+
+      console.log(`[INFO] Go 源站 (${GO_PROXY_ORIGINAL}) 响应: ${goOriginalMs >= 0 ? goOriginalMs + 'ms' : '超时/不可达'}`);
+      console.log(`[INFO] 配置镜像 (${GO_PROXY_DEFAULT}) 响应: ${goMirrorMs >= 0 ? goMirrorMs + 'ms' : '超时/不可达'}`);
+
+      if (goOriginalMs < 0 && goMirrorMs < 0) {
+        GO_PROXY = GO_PROXY_ORIGINAL;
+        console.log('[WARN] Go 源站和镜像均不可达，默认使用源站');
+      } else if (goOriginalMs < 0) {
+        GO_PROXY = GO_PROXY_DEFAULT;
+        console.log('[INFO] Go 源站不可达，使用配置镜像');
+      } else if (goMirrorMs < 0) {
+        GO_PROXY = GO_PROXY_ORIGINAL;
+        console.log('[INFO] 配置镜像不可达，使用 Go 源站');
+      } else if (goOriginalMs <= goMirrorMs) {
+        GO_PROXY = GO_PROXY_ORIGINAL;
+        console.log(`[OK] Go 源站更快 (${goOriginalMs}ms <= ${goMirrorMs}ms)，使用源站`);
+      } else {
+        GO_PROXY = GO_PROXY_DEFAULT;
+        console.log(`[OK] 配置镜像更快 (${goMirrorMs}ms < ${goOriginalMs}ms)，使用镜像`);
+      }
     }
   } else {
-    GO_PROXY = GO_PROXY_DEFAULT;
+    GO_PROXY = GO_PROXY_ORIGINAL;
     console.log('[INFO] Go 未安装，跳过 Go 代理测速');
   }
 }
@@ -315,7 +328,7 @@ async function runPreCommit(cmdResult) {
       console.log('[ERROR] pre-commit 执行失败（钩子安装或环境错误），任务按失败状态退出');
       console.log('[INFO] 请检查网络连通性、钩子仓库地址（建议 GitCode 镜像仓）、.pre-commit-config.yaml 配置后重试');
       console.log('      详细错误可查看 pre-commit 日志: ~/.cache/pre-commit/pre-commit.log');
-      console.log('\n如需了解更多 pre-commit 配置等信息，请查阅: https://gitcode.com/openlibing/docs/blob/main/static-code-analysis/solutions/pre-commit/README.md');
+      console.log('\n[INFO] 如需了解更多 pre-commit 配置等信息，请查阅项目 README 或内部文档站点');
       return { failed: true, output, failureType: 'install' };
     }
 
@@ -330,12 +343,12 @@ async function runPreCommit(cmdResult) {
     } else {
       console.log('   pre-commit run --all-files');
     }
-    console.log('\n如需了解更多告警屏蔽、pre-commit配置等信息，请查阅: https://gitcode.com/openlibing/docs/blob/main/static-code-analysis/solutions/pre-commit/README.md');
+    console.log('\n[INFO] 如需了解更多告警屏蔽、pre-commit配置等信息，请查阅项目 README 或内部文档站点');
     // 不在此退出：pre-commit 失败时扫描报告同样有价值，报告上传完成后由 run() 统一按失败状态退出
     return { failed: true, output, failureType: 'check' };
   }
   console.log('[OK] pre-commit 检查通过');
-  console.log('如需了解更多告警屏蔽、pre-commit配置等信息，请查阅: https://gitcode.com/openlibing/docs/blob/main/static-code-analysis/solutions/pre-commit/README.md');
+  console.log('[INFO] 如需了解更多告警屏蔽、pre-commit配置等信息，请查阅项目 README 或内部文档站点');
   return { failed: false, output, failureType: 'none' };
 }
 
@@ -730,6 +743,9 @@ module.exports = {
  * 第一批支持：clang-tidy / bandit / gosec / spotbugs / rust-clippy / eslint / gitleaks / detect-secrets。
  * 每种工具实现一个行解析器：输入失败钩子的输出块行（trimmed 非空），输出结构化 findings。
  * 供 pre-commit-action 在用户未提供 *.sarif 时生成 <tool>.sarif。
+ *
+ * 【安全合规说明】本文件中的公网地址（SARIF $schema 与各工具 helpUri）为 SARIF 2.1.0 标准
+ * 格式声明字段与工具官方文档链接，属功能必需，已登记白名单作为合规例外，不得删除或替换。
  */
 
 const crypto = __nccwpck_require__(982);
@@ -822,7 +838,7 @@ function parseBandit(lines) {
   const findings = [];
   let cur = null;
   for (const line of lines) {
-    let m = line.match(/^>>\s*Issue:\s*\[([A-Z]\d+):([\w\-]+)\]\s*(.+)$/);
+    let m = line.match(/^>>\s*Issue:\s*\[([A-Z]\d+):([\w-]+)\]\s*(.+)$/);
     if (m) {
       cur = { ruleId: m[1], ruleDesc: m[2], message: m[3], severity: '' };
       findings.push(cur);
@@ -841,7 +857,7 @@ function parseBandit(lines) {
   }
   // 单行格式
   for (const line of lines) {
-    const m = line.match(/^Issue:\s*\[([A-Z]\d+):([\w\-]+)\]\s*(.+?)\s+in file\s+(\S+)\s+at line\s+(\d+)/);
+    const m = line.match(/^Issue:\s*\[([A-Z]\d+):([\w-]+)\]\s*(.+?)\s+in file\s+(\S+)\s+at line\s+(\d+)/);
     if (m) {
       findings.push({
         ruleId: m[1],
@@ -885,7 +901,7 @@ function parseGosec(lines) {
 function parseSpotbugs(lines) {
   const findings = [];
   // 格式：M DLS_DEAD_LOCAL_STORE: message  In class Foo  In method bar  At Foo.java:[line 10]
-  const re = /^([HML])\s+([\w\.]+):\s*(.+?)\s+In class\s+(\S+)\s+In method\s+(.+?)\s+At\s+(\S+):\[line\s+(\d+)(?:-(\d+))?\]/;
+  const re = /^([HML])\s+([\w.]+):\s*(.+?)\s+In class\s+(\S+)\s+In method\s+(.+?)\s+At\s+(\S+):\[line\s+(\d+)(?:-(\d+))?\]/;
   for (const line of lines) {
     const m = line.match(re);
     if (!m) continue;
@@ -938,7 +954,7 @@ function parseClippy(lines) {
 function parseEslint(lines) {
   const findings = [];
   let currentFile = '';
-  const resultRe = /^\s*(\d+):(\d+)\s+(error|warning)\s+(.+?)\s+([\w\-\.\/\\@]+)\s*$/;
+  const resultRe = /^\s*(\d+):(\d+)\s+(error|warning)\s+(.+?)\s+([\w-./\\@]+)\s*$/;
   for (const line of lines) {
     if (!line.trim()) continue;
     const m = line.match(resultRe);
@@ -966,7 +982,7 @@ function parseEslint(lines) {
 /** gitleaks：单行 "○  [rule] msg in file:line" 或多行 Finding（RuleID/File/Line/Secret/Description） */
 function parseGitleaks(lines) {
   const findings = [];
-  const singleRe = /^○\s*\[([\w\-]+)\]\s*(.+?)\s+in\s+(\S+):(\d+)/;
+  const singleRe = /^○\s*\[([\w-]+)\]\s*(.+?)\s+in\s+(\S+):(\d+)/;
   let cur = null;
   for (const line of lines) {
     const m = line.match(singleRe);

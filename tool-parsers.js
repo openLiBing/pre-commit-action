@@ -5,6 +5,9 @@
  * 第一批支持：clang-tidy / bandit / gosec / spotbugs / rust-clippy / eslint / gitleaks / detect-secrets。
  * 每种工具实现一个行解析器：输入失败钩子的输出块行（trimmed 非空），输出结构化 findings。
  * 供 pre-commit-action 在用户未提供 *.sarif 时生成 <tool>.sarif。
+ *
+ * 【安全合规说明】本文件中的公网地址（SARIF $schema 与各工具 helpUri）为 SARIF 2.1.0 标准
+ * 格式声明字段与工具官方文档链接，属功能必需，已登记白名单作为合规例外，不得删除或替换。
  */
 
 const crypto = require('crypto');
@@ -97,7 +100,7 @@ function parseBandit(lines) {
   const findings = [];
   let cur = null;
   for (const line of lines) {
-    let m = line.match(/^>>\s*Issue:\s*\[([A-Z]\d+):([\w\-]+)\]\s*(.+)$/);
+    let m = line.match(/^>>\s*Issue:\s*\[([A-Z]\d+):([\w-]+)\]\s*(.+)$/);
     if (m) {
       cur = { ruleId: m[1], ruleDesc: m[2], message: m[3], severity: '' };
       findings.push(cur);
@@ -116,7 +119,7 @@ function parseBandit(lines) {
   }
   // 单行格式
   for (const line of lines) {
-    const m = line.match(/^Issue:\s*\[([A-Z]\d+):([\w\-]+)\]\s*(.+?)\s+in file\s+(\S+)\s+at line\s+(\d+)/);
+    const m = line.match(/^Issue:\s*\[([A-Z]\d+):([\w-]+)\]\s*(.+?)\s+in file\s+(\S+)\s+at line\s+(\d+)/);
     if (m) {
       findings.push({
         ruleId: m[1],
@@ -160,7 +163,7 @@ function parseGosec(lines) {
 function parseSpotbugs(lines) {
   const findings = [];
   // 格式：M DLS_DEAD_LOCAL_STORE: message  In class Foo  In method bar  At Foo.java:[line 10]
-  const re = /^([HML])\s+([\w\.]+):\s*(.+?)\s+In class\s+(\S+)\s+In method\s+(.+?)\s+At\s+(\S+):\[line\s+(\d+)(?:-(\d+))?\]/;
+  const re = /^([HML])\s+([\w.]+):\s*(.+?)\s+In class\s+(\S+)\s+In method\s+(.+?)\s+At\s+(\S+):\[line\s+(\d+)(?:-(\d+))?\]/;
   for (const line of lines) {
     const m = line.match(re);
     if (!m) continue;
@@ -213,7 +216,7 @@ function parseClippy(lines) {
 function parseEslint(lines) {
   const findings = [];
   let currentFile = '';
-  const resultRe = /^\s*(\d+):(\d+)\s+(error|warning)\s+(.+?)\s+([\w\-\.\/\\@]+)\s*$/;
+  const resultRe = /^\s*(\d+):(\d+)\s+(error|warning)\s+(.+?)\s+([\w-./\\@]+)\s*$/;
   for (const line of lines) {
     if (!line.trim()) continue;
     const m = line.match(resultRe);
@@ -241,7 +244,7 @@ function parseEslint(lines) {
 /** gitleaks：单行 "○  [rule] msg in file:line" 或多行 Finding（RuleID/File/Line/Secret/Description） */
 function parseGitleaks(lines) {
   const findings = [];
-  const singleRe = /^○\s*\[([\w\-]+)\]\s*(.+?)\s+in\s+(\S+):(\d+)/;
+  const singleRe = /^○\s*\[([\w-]+)\]\s*(.+?)\s+in\s+(\S+):(\d+)/;
   let cur = null;
   for (const line of lines) {
     const m = line.match(singleRe);
