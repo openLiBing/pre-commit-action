@@ -1,14 +1,14 @@
 /******/ (() => { // webpackBootstrap
 /******/ 	var __webpack_modules__ = ({
 
-/***/ 136:
+/***/ 910:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 const { execSync, execFileSync, spawn } = __nccwpck_require__(317);
 const fs = __nccwpck_require__(896);
 const os = __nccwpck_require__(857);
 const path = __nccwpck_require__(928);
-const { buildToolSarif, matchToolParser } = __nccwpck_require__(737);
+const { buildToolSarif, matchToolParser } = __nccwpck_require__(967);
 
 const PIP_MIRROR_DEFAULT = 'https://mirrors.huaweicloud.com/repository/pypi/simple';
 const GO_PROXY_DEFAULT = 'https://mirrors.huaweicloud.com/repository/goproxy/';
@@ -93,16 +93,17 @@ function sanitizePath(pathStr) {
   return pathStr.replace(/(\d+\.\d+\.\d+\.\d+)/g, '[IP_ADDRESS]');
 }
 
-function execCapture(cmd) {
+// 数组传参执行，不经 shell 解析（Ref issue #26）；stderr 丢弃，仅捕获 stdout
+function execCapture(argv) {
   try {
-    return execSync(cmd, { encoding: 'utf-8', shell: '/bin/bash' }).trim();
+    return execFileSync(argv[0], argv.slice(1), { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
   } catch (e) {
     return '';
   }
 }
 
 function testUrlSpeed(url) {
-  const result = execCapture(`curl -s -o /dev/null -w "%{time_total}" --max-time ${SPEED_TEST_TIMEOUT} "${url}" 2>/dev/null`);
+  const result = execCapture(['curl', '-s', '-o', '/dev/null', '-w', '%{time_total}', '--max-time', String(SPEED_TEST_TIMEOUT), url]);
   if (!result) return -1;
   const seconds = parseFloat(result);
   if (isNaN(seconds) || seconds <= 0) return -1;
@@ -135,7 +136,7 @@ function detectMirrorConfig() {
     console.log(`[OK] 华为镜像更快 (${pipMirrorMs}ms < ${pipOriginalMs}ms)，使用镜像`);
   }
 
-  const goVersion = execCapture('go version');
+  const goVersion = execCapture(['go', 'version']);
   if (goVersion) {
     const goOriginalMs = testUrlSpeed(GO_PROXY_ORIGINAL);
     const goMirrorMs = testUrlSpeed(GO_PROXY_DEFAULT);
@@ -594,17 +595,18 @@ console.log('\n===== [1] 检查 Python 环境 =====');
   detectMirrorConfig();
   execFile('python', ['-m', 'pip', 'config', 'set', 'global.index-url', PIP_MIRROR]);
   console.log('[INFO] 检查 Go 环境...');
-  const goVersion = execCapture('go version');
+  const goVersion = execCapture(['go', 'version']);
   console.log(`[INFO] goVersion = "${goVersion}"`);
   if (goVersion) {
     execFile('go', ['env', '-w', 'GO111MODULE=on']);
     execFile('go', ['env', '-w', `GOPROXY=${GO_PROXY}`]);
-    execFile('go', ['env', '-w', 'GONOSUMDB=*']);
+    // 不再设置 GONOSUMDB=*（Ref issue #31）：本平台仓无私有 Go 模块，
+    // 公共模块全部走 sum.golang.org 校验，保留供应链完整性防线
   } else {
     console.log('[WARN] Go 未安装，跳过 Go 代理配置');
   }
   const MIN_PIP_VERSION = '21.0';
-  const pipVersionOutput = execCapture('python -m pip --version');
+  const pipVersionOutput = execCapture(['python', '-m', 'pip', '--version']);
   const pipVersionMatch = pipVersionOutput.match(/pip\s+(\d+\.\d+)/);
   if (pipVersionMatch) {
     const currentVersion = parseFloat(pipVersionMatch[1]);
@@ -619,13 +621,16 @@ console.log('\n===== [1] 检查 Python 环境 =====');
     console.log('[INFO] pip 未安装，开始安装 pip');
     execFile('python', ['-m', 'pip', 'install', '--upgrade', 'pip', '--timeout', PIP_TIMEOUT]);
   }
-  execFile('python', ['-m', 'pip', 'install', 'pre-commit', '--timeout', PIP_TIMEOUT]);
+  // 固定 pre-commit 版本（Ref issue #23），防止 PyPI 上游投毒随 latest 自动引入；
+  // 升级需按安全整改节奏手动更新版本号，不做 --require-hashes
+  const PRE_COMMIT_VERSION = '4.7.0';
+  execFile('python', ['-m', 'pip', 'install', `pre-commit==${PRE_COMMIT_VERSION}`, '--timeout', PIP_TIMEOUT]);
   execFile('python', ['-m', 'pre_commit', '--version']);
 
   console.log('\n===== [3] 定位代码目录 =====');
   const workspace = process.env.WORKSPACE || process.cwd();
 
-  if (!/^\/[\w\-\/.]+$/.test(workspace)) {
+  if (!/^\/[\w\-/.]+$/.test(workspace)) {
     console.log('[ERROR] Invalid workspace path');
     process.exit(1);
   }
@@ -714,7 +719,7 @@ module.exports = {
 
 /***/ }),
 
-/***/ 737:
+/***/ 967:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
@@ -1147,7 +1152,7 @@ module.exports = require("path");
 /******/ 	// startup
 /******/ 	// Load entry module and return exports
 /******/ 	// This entry module is referenced by other modules so it can't be inlined
-/******/ 	var __webpack_exports__ = __nccwpck_require__(136);
+/******/ 	var __webpack_exports__ = __nccwpck_require__(910);
 /******/ 	module.exports = __webpack_exports__;
 /******/ 	
 /******/ })()

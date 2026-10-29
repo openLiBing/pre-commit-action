@@ -18,6 +18,7 @@ PR 增量检查流程：
 
 | 参数       | 说明                                                                                                                                                                                                                                                               | 必填 | 默认值                   |
 | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---- | ------------------------ |
+| gc_token   | Git 认证 Token。pre-commit 增量检查需要 fetch PR 源仓代码时用于私有仓库认证。目标仓为公开仓或已配置其他认证方式时可不填                                                                                                                                            | 否   | 空                       |
 | extra_args | pre-commit 运行参数。为空时自动判断：PR 事件检查增量文件，非 PR 检查全量；填写时按指定参数执行                                                                                                                                                                     | 否   | 空（自动判断）           |
 | report-dir | SARIF 报告约定目录（机器临时目录，非代码仓目录）。插件扫描该目录下 `*.sarif` 作为用户提供的报告；工具未提供时按支持列表解析 pre-commit 日志兜底生成 `<tool>.sarif` 到该目录。只生成报告文件，上传由 workflow 中 openlibing-upload-sarif 完成                       | 否   | /tmp/pre-commit-reports/ |
 | sarif-file | SARIF 文件/目录路径，逗号分隔支持多值（与 openlibing-upload-sarif 的 `sarif_file` 一致）：单个文件、多个文件、单个目录、多个目录（目录自动扫描其中所有 `.sarif` 文件，非递归）。填写后优先于 `report-dir` 目录扫描；未填写时回退扫描 `report-dir` 目录下 `*.sarif` | 否   | 空（回退 report-dir）    |
@@ -26,11 +27,37 @@ PR 增量检查流程：
 
 ## 输出参数
 
-| 参数          | 说明                                                                                                               |
-| ------------- | ------------------------------------------------------------------------------------------------------------------ |
-| result        | 运行结果：success 或 failed                                                                                        |
-| checked_files | 检查的文件范围                                                                                                     |
-| sarif-files   | 收集/兜底生成的 SARIF 文件绝对路径列表（逗号分隔，可空），可直接传给 openlibing-upload-sarif 的 `sarif-file` input |
+| 参数        | 说明                                                                                                               |
+| ----------- | ------------------------------------------------------------------------------------------------------------------ |
+| sarif-files | 收集/兜底生成的 SARIF 文件绝对路径列表（逗号分隔，可空），可直接传给 openlibing-upload-sarif 的 `sarif-file` input |
+
+> 运行结果不通过 output 暴露：PR 门禁场景失败直接 `exit(1)` 使 step 失败（流水线状态即结果）；版本级触发场景失败仅告警提示。
+
+## 环境变量（镜像源配置，强烈建议配置）
+
+插件安装 pre-commit 及各语言钩子依赖时需要访问 PyPI / Go module proxy。**未配置时回退官方源**（pypi.org / proxy.golang.org），功能可用但速度极慢，慢网/内网 runner 可能明显变慢甚至超时。实测数据（未配置镜像、走 PyPI 官方源）：`virtualenv` 单包 5.6MB 下载速率约 30 KB/s、耗时 3 分 52 秒，整个 job 约 6 分钟。
+
+> **版本要求**：本节环境变量需镜像配置代码支持合入（PR !12）并发版后生效；当前已发布版本 v1.0.3 的镜像地址仍为代码内固定值，不读取这两个变量（配置了也不会报错，仅不生效）。发版前请勿依赖本节配置。
+
+| 环境变量           | 作用                                   | 推荐值（华为云镜像）                                     | 未配置时回退     |
+| ------------------ | -------------------------------------- | -------------------------------------------------------- | ---------------- |
+| PIP_MIRROR_DEFAULT | pip 安装 pre-commit 及 Python 钩子依赖 | `https://mirrors.huaweicloud.com/repository/pypi/simple` | pypi.org 官方源  |
+| GO_PROXY_DEFAULT   | Go 语言钩子依赖下载代理                | `https://mirrors.huaweicloud.com/repository/goproxy/`    | proxy.golang.org |
+
+在 workflow 的 step `env` 块中注入（只需在本插件步骤生效，不污染其他步骤）：
+
+```yaml
+jobs:
+  pre-commit:
+    steps:
+      - name: run pre-commit
+        uses: openlibing/pre-commit-action@v1.0.3
+        env:
+          PIP_MIRROR_DEFAULT: https://mirrors.huaweicloud.com/repository/pypi/simple
+          GO_PROXY_DEFAULT: https://mirrors.huaweicloud.com/repository/goproxy/
+```
+
+配置后插件会先测速：镜像可达且更快时使用镜像，镜像不可达时自动回退官方源（不会因镜像故障而失败）。
 
 ## 报告生成与上传编排
 
@@ -198,3 +225,4 @@ repos:
 - 运行前需先使用 `setup-python` 配置 Python 环境
 - 项目根目录需包含 `.pre-commit-config.yaml` 配置文件
 - PR 增量检查依赖 `ATOMGIT_BASE_REF` 和 `ATOMGIT_HEAD_REF` 环境变量
+- **强烈建议配置 `PIP_MIRROR_DEFAULT` / `GO_PROXY_DEFAULT` 环境变量**（见「环境变量」章节）：未配置时回退 PyPI / Go 官方源，慢网/内网 runner 下钩子依赖安装可能耗时数分钟甚至超时
