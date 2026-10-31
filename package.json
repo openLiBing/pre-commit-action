@@ -4,6 +4,7 @@
   "description": "GitCode Action plugin for running pre-commit hooks",
   "main": "index.js",
   "scripts": {
+    "test": "node --test",
     "package": "ncc build index.js -o dist",
     "zip": "node zip.js",
     "build": "npm run package && npm run zip"
