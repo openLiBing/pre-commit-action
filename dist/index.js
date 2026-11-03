@@ -1,14 +1,14 @@
 /******/ (() => { // webpackBootstrap
 /******/ 	var __webpack_modules__ = ({
 
-/***/ 910:
+/***/ 136:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 const { execSync, execFileSync, spawn } = __nccwpck_require__(317);
 const fs = __nccwpck_require__(896);
 const os = __nccwpck_require__(857);
 const path = __nccwpck_require__(928);
-const { buildToolSarif, matchToolParser } = __nccwpck_require__(967);
+const { buildToolSarif, matchToolParser } = __nccwpck_require__(737);
 
 // 镜像地址改为环境变量注入（PIP_MIRROR_DEFAULT / GO_PROXY_DEFAULT），源码不再硬编码第三方镜像公网地址；
 // 未配置时回退到官方源。PIP_ORIGINAL / GO_PROXY_ORIGINAL 为官方源地址，属功能必需，登记白名单（合规例外）。
@@ -495,6 +495,30 @@ function isPrEvent() {
   return (eventName === 'mr' || eventName === 'pull_request' || eventName === 'note') && baseRef;
 }
 
+/** 清理默认报告目录中的历史残留 SARIF（Ref issue #43）。
+ * 默认目录固定为 /tmp/pre-commit-reports/，成功路径会保留报告供后续
+ * openlibing-upload-sarif 消费；在共享 runner 上，上一次任务残留的 *.sarif
+ * 会被本次 collectScanReports 全量收集并误归属到当前仓。
+ * 因此在每次运行开始、收集之前先清空默认目录内的 *.sarif。
+ * 用户通过 report-dir 显式指定的目录属业务资产，不在清理范围。 */
+function clearStaleDefaultReports() {
+  if (!fs.existsSync(REPORT_DIR_DEFAULT)) return;
+  let removed = 0;
+  try {
+    for (const name of fs.readdirSync(REPORT_DIR_DEFAULT)) {
+      if (!name.toLowerCase().endsWith('.sarif')) continue;
+      fs.rmSync(path.join(REPORT_DIR_DEFAULT, name), { force: true });
+      removed += 1;
+    }
+  } catch (e) {
+    console.log(`[WARN] 清理历史残留报告失败: ${e.message}`);
+    return;
+  }
+  if (removed > 0) {
+    console.log(`[INFO] 已清理历史残留 SARIF 报告 ${removed} 个: ${REPORT_DIR_DEFAULT}`);
+  }
+}
+
 /** 收集 SARIF 报告：优先收集业务仓转换好的 *.sarif（用户通过 sarif-file / report-dir 提供）；
  * 若报告目录无 *.sarif，则解析 pre-commit 运行日志生成兜底 SARIF（防止用户未提供报告的场景）。
  * 只负责生成/归一化报告文件，不做上传回调——上传由 workflow 中 openlibing-upload-sarif 完成。
@@ -503,6 +527,9 @@ function isPrEvent() {
  * @returns {string[]} 收集到的 SARIF 文件绝对路径数组（可能为空） */
 function collectScanReports(preCommitOutput) {
   console.log('\n===== [7] 报告收集与兜底生成（上传交由 workflow 中的 openlibing-upload-sarif） =====');
+
+  // Ref issue #43：清理共享 runner 上历史任务残留的默认目录报告，避免误收集归属当前仓
+  clearStaleDefaultReports();
 
   // PR 场景只做门禁检查，不生成报告（门禁失败退出逻辑在 run() 中处理）
   if (isPrEvent()) {
@@ -759,7 +786,7 @@ module.exports = {
 
 /***/ }),
 
-/***/ 967:
+/***/ 737:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
@@ -1195,7 +1222,7 @@ module.exports = require("path");
 /******/ 	// startup
 /******/ 	// Load entry module and return exports
 /******/ 	// This entry module is referenced by other modules so it can't be inlined
-/******/ 	var __webpack_exports__ = __nccwpck_require__(910);
+/******/ 	var __webpack_exports__ = __nccwpck_require__(136);
 /******/ 	module.exports = __webpack_exports__;
 /******/ 	
 /******/ })()
