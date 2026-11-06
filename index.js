@@ -493,7 +493,8 @@ function isPrEvent() {
  * 默认目录固定为 /tmp/pre-commit-reports/，成功路径会保留报告供后续
  * openlibing-upload-sarif 消费；在共享 runner 上，上一次任务残留的 *.sarif
  * 会被本次 collectScanReports 全量收集并误归属到当前仓。
- * 因此在每次运行开始、收集之前先清空默认目录内的 *.sarif。
+ * 因此必须在 pre-commit 执行之前清空默认目录内的 *.sarif：钩子会在运行阶段把
+ * 本次报告写入同一目录（报告契约 ①/②），清理放到收集阶段会把本次报告一并删掉。
  * 用户通过 report-dir 显式指定的目录属业务资产，不在清理范围。 */
 function clearStaleDefaultReports() {
   if (!fs.existsSync(REPORT_DIR_DEFAULT)) return;
@@ -521,9 +522,6 @@ function clearStaleDefaultReports() {
  * @returns {string[]} 收集到的 SARIF 文件绝对路径数组（可能为空） */
 function collectScanReports(preCommitOutput) {
   console.log('\n===== [7] 报告收集与兜底生成（上传交由 workflow 中的 openlibing-upload-sarif） =====');
-
-  // Ref issue #43：清理共享 runner 上历史任务残留的默认目录报告，避免误收集归属当前仓
-  clearStaleDefaultReports();
 
   // PR 场景只做门禁检查，不生成报告（门禁失败退出逻辑在 run() 中处理）
   if (isPrEvent()) {
@@ -731,6 +729,10 @@ console.log('\n===== [1] 检查 Python 环境 =====');
   } else {
     cmdResult = buildAutoArgs();
   }
+
+  // Ref issue #43：在 pre-commit 执行前清理共享 runner 上历史任务残留的默认目录报告，
+  // 避免误收集归属当前仓；同时不影响本次运行中钩子写入的报告
+  clearStaleDefaultReports();
 
   console.log('\n===== [6] 运行 pre-commit 检查 =====');
   const preCommitResult = await runPreCommit(cmdResult);
