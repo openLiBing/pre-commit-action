@@ -46,7 +46,7 @@ function getInput(name) {
         continue;
       }
       if (!allowedArgs.includes(arg) && !arg.startsWith('--')) {
-        console.log(`[ERROR] Invalid extra_args: ${arg}. Only -- arguments are allowed.`);
+        console.log(`[ERROR] Invalid extra_args: ${sanitizeLogValue(arg)}. Only -- arguments are allowed.`);
         process.exit(1);
       }
     }
