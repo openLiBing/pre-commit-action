@@ -46,7 +46,7 @@ function getInput(name) {
         continue;
       }
       if (!allowedArgs.includes(arg) && !arg.startsWith('--')) {
-        console.log(`[ERROR] Invalid extra_args: ${arg}. Only -- arguments are allowed.`);
+        console.log(`[ERROR] Invalid extra_args: ${sanitizeLogValue(arg)}. Only -- arguments are allowed.`);
         process.exit(1);
       }
     }
@@ -79,12 +79,12 @@ function setOutput(key, value) {
 }
 
 function exec(cmd) {
-  console.log(`> ${cmd}`);
+  console.log(`> ${sanitizeLogValue(cmd)}`);
   execSync(cmd, { stdio: 'inherit', shell: '/bin/bash' });
 }
 
 function execFile(cmd, args, options = {}) {
-  console.log(`> ${cmd} ${args.join(' ')}`);
+  console.log(`> ${sanitizeLogValue(cmd)} ${sanitizeLogValue(args.join(' '))}`);
   const spawnOptions = { stdio: 'inherit', cwd: options.cwd };
   // 仅在显式传入时覆盖 env（token 经环境变量传递给子进程，不在命令行参数中出现）
   if (options.env) spawnOptions.env = options.env;
@@ -93,6 +93,14 @@ function execFile(cmd, args, options = {}) {
 
 function sanitizePath(pathStr) {
   return pathStr.replace(/(\d+\.\d+\.\d+\.\d+)/g, '[IP_ADDRESS]');
+}
+
+/** 清洗日志中的不可信输入（Ref issue #48）：剔除 \r\n 与不可见控制字符，
+ * 防止外部可控内容（extra_args、文件名、命令参数）注入伪造日志行。
+ * 正常单行内容经清洗后保持不变。 */
+function sanitizeLogValue(value) {
+  // eslint-disable-next-line no-control-regex
+  return String(value).replace(/[\r\n\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '');
 }
 
 // 数组传参执行，不经 shell 解析（Ref issue #26）；stderr 丢弃，仅捕获 stdout
@@ -311,7 +319,7 @@ async function runPreCommit(cmdResult) {
   const runArgs = cmdResult.type === 'file'
     ? ['-m', 'pre_commit', 'run', '--files', ...cmdResult.files]
     : ['-m', 'pre_commit', 'run', ...cmdResult.args.split(' ')];
-  console.log(`> python ${runArgs.join(' ')}`);
+  console.log(`> python ${sanitizeLogValue(runArgs.join(' '))}`);
 
   const { status, error, output } = await runStreaming('python', runArgs, { cwd: process.cwd() });
 
@@ -339,7 +347,7 @@ async function runPreCommit(cmdResult) {
     console.log('   pip install pre-commit && pre-commit install --install-hooks');
     console.log('2. 检查并修复变更文件');
     if (cmdResult.type === 'file') {
-      console.log(`   pre-commit run --files ${cmdResult.files.join(' ')}`);
+      console.log(`   pre-commit run --files ${sanitizeLogValue(cmdResult.files.join(' '))}`);
     } else {
       console.log('   pre-commit run --all-files');
     }
@@ -730,7 +738,7 @@ console.log('\n===== [1] 检查 Python 环境 =====');
   console.log('\n===== [5] 构建运行参数 =====');
   let cmdResult;
   if (extraArgs) {
-    console.log(`[INFO] 检测到自定义参数: ${extraArgs}`);
+    console.log(`[INFO] 检测到自定义参数: ${sanitizeLogValue(extraArgs)}`);
     cmdResult = { type: 'args', args: extraArgs };
   } else {
     cmdResult = buildAutoArgs();
