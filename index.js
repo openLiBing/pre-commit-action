@@ -489,6 +489,31 @@ function isPrEvent() {
   return (eventName === 'mr' || eventName === 'pull_request' || eventName === 'note') && baseRef;
 }
 
+/** 清理默认报告目录中的历史残留 SARIF（Ref issue #43）。
+ * 默认目录固定为 /tmp/pre-commit-reports/，成功路径会保留报告供后续
+ * openlibing-upload-sarif 消费；在共享 runner 上，上一次任务残留的 *.sarif
+ * 会被本次 collectScanReports 全量收集并误归属到当前仓。
+ * 因此必须在 pre-commit 执行之前清空默认目录内的 *.sarif：钩子会在运行阶段把
+ * 本次报告写入同一目录（报告契约 ①/②），清理放到收集阶段会把本次报告一并删掉。
+ * 用户通过 report-dir 显式指定的目录属业务资产，不在清理范围。 */
+function clearStaleDefaultReports() {
+  if (!fs.existsSync(REPORT_DIR_DEFAULT)) return;
+  let removed = 0;
+  try {
+    for (const name of fs.readdirSync(REPORT_DIR_DEFAULT)) {
+      if (!name.toLowerCase().endsWith('.sarif')) continue;
+      fs.rmSync(path.join(REPORT_DIR_DEFAULT, name), { force: true });
+      removed += 1;
+    }
+  } catch (e) {
+    console.log(`[WARN] 清理历史残留报告失败: ${e.message}`);
+    return;
+  }
+  if (removed > 0) {
+    console.log(`[INFO] 已清理历史残留 SARIF 报告 ${removed} 个: ${REPORT_DIR_DEFAULT}`);
+  }
+}
+
 /** 收集 SARIF 报告：优先收集业务仓转换好的 *.sarif（用户通过 sarif-file / report-dir 提供）；
  * 若报告目录无 *.sarif，则解析 pre-commit 运行日志生成兜底 SARIF（防止用户未提供报告的场景）。
  * 只负责生成/归一化报告文件，不做上传回调——上传由 workflow 中 openlibing-upload-sarif 完成。
@@ -704,6 +729,10 @@ console.log('\n===== [1] 检查 Python 环境 =====');
   } else {
     cmdResult = buildAutoArgs();
   }
+
+  // Ref issue #43：在 pre-commit 执行前清理共享 runner 上历史任务残留的默认目录报告，
+  // 避免误收集归属当前仓；同时不影响本次运行中钩子写入的报告
+  clearStaleDefaultReports();
 
   console.log('\n===== [6] 运行 pre-commit 检查 =====');
   const preCommitResult = await runPreCommit(cmdResult);
