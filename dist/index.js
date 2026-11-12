@@ -6,7 +6,6 @@
 
 const { execSync, execFileSync, spawn } = __nccwpck_require__(317);
 const fs = __nccwpck_require__(896);
-const os = __nccwpck_require__(857);
 const path = __nccwpck_require__(928);
 const { buildToolSarif, matchToolParser } = __nccwpck_require__(737);
 
@@ -85,10 +84,7 @@ function exec(cmd) {
 
 function execFile(cmd, args, options = {}) {
   console.log(`> ${sanitizeLogValue(cmd)} ${sanitizeLogValue(args.join(' '))}`);
-  const spawnOptions = { stdio: 'inherit', cwd: options.cwd };
-  // 仅在显式传入时覆盖 env（token 经环境变量传递给子进程，不在命令行参数中出现）
-  if (options.env) spawnOptions.env = options.env;
-  execFileSync(cmd, args, spawnOptions);
+  execFileSync(cmd, args, { stdio: 'inherit', cwd: options.cwd });
 }
 
 function sanitizePath(pathStr) {
@@ -187,65 +183,44 @@ function detectMirrorConfig() {
   }
 }
 
-/** 为 git fetch 生成 GIT_ASKPASS 凭证脚本。
- * 脚本写在系统临时目录（不在被检仓工作区），token 经环境变量 PRE_COMMIT_GC_TOKEN
- * 传递给 askpass 子进程，不出现在任何进程命令行参数（SENS-01），
- * 也不写入被检仓 .git/config（SENS-03 / SENS-14）。
- * @param {string} token 用户凭证
- * @returns {(string|null)} askpass 脚本绝对路径；token 为空时返回 null */
-function createGitAskpass(token) {
-  if (!token) return null;
-  const scriptPath = path.join(os.tmpdir(), `gc-askpass-${process.pid}.sh`);
-  const scriptContent = [
-    '#!/bin/sh',
-    'case "$1" in',
-    '  Username*) echo "oauth2" ;;',
-    '  *) echo "$PRE_COMMIT_GC_TOKEN" ;;',
-    'esac',
-    ''
-  ].join('\n');
-  fs.writeFileSync(scriptPath, scriptContent, { mode: 0o700 });
-  return scriptPath;
-}
-
-/** 删除 GIT_ASKPASS 凭证脚本（任务结束立即清理，避免临时残留）。 */
-function removeGitAskpass(scriptPath) {
-  if (!scriptPath) return;
-  try {
-    fs.rmSync(scriptPath, { force: true });
-  } catch (e) {
-    console.log(`[WARN] 清理 GIT_ASKPASS 脚本失败: ${sanitizePath(String(scriptPath))}`);
+/** 解析 PR 增量比较的基线 ref。
+ * 优先使用 checkout 全量检出（fetch-depth: 0）已生成的远端基线 ref origin/<baseRef>，
+ * 此时无需插件再做任何认证 fetch；缺失时回退为直接 fetch，依赖 checkout 已持久化的
+ * 仓库凭证，插件不接收也不处理任何 Git 凭证。
+ * @param {string} baseRef PR 目标分支
+ * @returns {string} 可作为 pre-commit --from-ref 的 ref */
+function resolveBaseRef(baseRef) {
+  const baseSha = execCapture(['git', 'rev-parse', '--verify', '--quiet', `origin/${baseRef}`]);
+  if (baseSha) {
+    console.log(`[INFO] 使用已检出的基线 ref origin/${baseRef} (${sanitizeLogValue(baseSha.slice(0, 8))}) 做增量比较`);
+    return `origin/${baseRef}`;
   }
+
+  console.log(`[WARN] 未找到基线 ref origin/${sanitizeLogValue(baseRef)}，回退为直接 fetch 目标分支`);
+  console.log('[WARN] 建议 checkout 步骤配置 fetch-depth: 0，全量检出时即生成基线远端 ref');
+  try {
+    execFile('git', ['fetch', 'origin', baseRef]);
+  } catch (e) {
+    console.log(`[ERROR] 拉取目标分支 ${sanitizeLogValue(baseRef)} 失败: ${sanitizeLogValue(e.message)}`);
+    console.log('[ERROR] 请确认 checkout 步骤已配置 fetch-depth: 0，或仓库凭证具备读取目标分支权限');
+    process.exit(1);
+  }
+  return 'FETCH_HEAD';
 }
 
 function buildAutoArgs() {
   const eventName = (process.env.ATOMGIT_EVENT_NAME || '').toLowerCase();
   const baseRef = process.env.ATOMGIT_BASE_REF || '';
-  console.log(`[INFO] 当前事件: ${eventName || '(未知)'}, 目标分支: ${baseRef || '(无)'}`);
+  console.log(`[INFO] 当前事件: ${eventName || '(未知)'}, 目标分支: ${sanitizeLogValue(baseRef) || '(无)'}`);
 
   if ((eventName === 'mr' || eventName === 'pull_request' || eventName === 'note') && baseRef) {
-    console.log(`[INFO] 检测到 PR 事件，目标分支: ${baseRef}`);
+    console.log(`[INFO] 检测到 PR 事件，目标分支: ${sanitizeLogValue(baseRef)}`);
 
-    // 使用 GIT_ASKPASS 注入凭证（替代原 git remote set-url 方案）：
-    //  - token 经环境变量传递，进程 argv 不含明文（SENS-01）
-    //  - 不修改 remote URL，token 不持久化到被检仓 .git/config，工作区无凭证残留（SENS-03 / SENS-14）
-    const token = getInput('gc_token');
-    const askpassScript = createGitAskpass(token);
+    // 增量基线由 checkout 全量检出生成（fetch-depth: 0），插件不注入任何凭证
+    const fromRef = resolveBaseRef(baseRef);
 
-    console.log(`[INFO] 拉取目标分支 origin/${baseRef} 以获取增量文件`);
-    try {
-      execFile('git', ['fetch', 'origin', baseRef], {
-        env: askpassScript
-          ? { ...process.env, GIT_ASKPASS: askpassScript, PRE_COMMIT_GC_TOKEN: token, GIT_TERMINAL_PROMPT: '0' }
-          : process.env
-      });
-    } finally {
-      // 无论 fetch 成功与否都立即清理凭证脚本，缩小 token 暂存时间窗
-      removeGitAskpass(askpassScript);
-    }
-
-    console.log(`[INFO] 使用 --from-ref FETCH_HEAD --to-ref HEAD 增量检查`);
-    return { type: 'args', args: `--from-ref FETCH_HEAD --to-ref HEAD` };
+    console.log(`[INFO] 使用 --from-ref ${fromRef} --to-ref HEAD 增量检查`);
+    return { type: 'args', args: `--from-ref ${fromRef} --to-ref HEAD` };
   }
 
   console.log('[INFO] 非 PR 事件，使用 --all-files 检查全量文件');
@@ -790,7 +765,8 @@ module.exports = {
   run,
   collectScanReports,
   parsePreCommitLog,
-  generateFallbackSarif
+  generateFallbackSarif,
+  resolveBaseRef
 };
 
 
@@ -1171,14 +1147,6 @@ module.exports = require("crypto");
 
 "use strict";
 module.exports = require("fs");
-
-/***/ }),
-
-/***/ 857:
-/***/ ((module) => {
-
-"use strict";
-module.exports = require("os");
 
 /***/ }),
 
