@@ -13,9 +13,9 @@ PR 增量检查流程：
 
 1. 直接使用 checkout 全量检出（`fetch-depth: 0`）已生成的基线远端 ref `origin/<baseRef>`，插件不再自行认证 fetch
 2. 执行 `pre-commit run --from-ref origin/<baseRef> --to-ref HEAD`
-3. 若 `origin/<baseRef>` 不存在，回退为 `git fetch origin <baseRef>`（复用 checkout 已持久化的仓库凭证），仍然失败则报错退出并提示配置 `fetch-depth: 0`
+3. 若 `origin/<baseRef>` 不存在，回退尝试 `git fetch origin <baseRef>`；该回退依赖 checkout 已持久化的仓库凭证，实测 GitCode 托管 checkout 不持久化凭证，回退不可用时会报错退出并提示配置 `fetch-depth: 0`
 
-> 使用前提：PR 场景的 checkout 步骤需配置 `fetch-depth: 0`，否则基线 ref 缺失会走回退 fetch 路径。插件不再接收任何 Git 认证 Token。
+> 强制前提：PR 场景的 checkout 步骤**必须**配置 `fetch-depth: 0`（全量检出）。浅检出不生成 `origin/<baseRef>`，回退 fetch 在 GitCode 上会因缺少凭证失败，导致 PR 增量门禁无法运行。插件不再接收任何 Git 认证 Token。
 
 ## 输入参数
 
@@ -223,7 +223,7 @@ repos:
 
 ## 注意事项
 
-- 运行前需先使用 `checkout` 检出代码；PR 增量检查场景建议 checkout 配置 `fetch-depth: 0`（否则回退为插件自行 fetch）
+- 运行前需先使用 `checkout` 检出代码；PR 增量检查场景**必须**配置 `fetch-depth: 0`（浅检出不生成基线 ref，回退 fetch 在 GitCode 上因缺少凭证不可用）
 - 运行前需先使用 `setup-python` 配置 Python 环境
 - 项目根目录需包含 `.pre-commit-config.yaml` 配置文件
 - PR 增量检查依赖 `ATOMGIT_BASE_REF` 和 `ATOMGIT_HEAD_REF` 环境变量
