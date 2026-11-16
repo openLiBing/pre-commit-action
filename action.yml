@@ -1,16 +1,16 @@
 name: "pre-commit-action"
-version: 1.0.3
+version: 1.1.0
 author: "test-devops"
 description: "安装 pre-commit 并对代码仓库执行钩子检查"
 
 inputs:
   gc_token:
-    description: "pre-commit 增量检查时所需密钥（私有仓库 git fetch 认证用）"
+    description: "【已废弃，仅兼容】pre-commit 增量检查时所需密钥。基线 ref 缺失时用于 git fetch 认证；新接入请改用 checkout 的 fetch-depth: 0，无需传此参数"
     required: false
     default: ""
     layout:
       type: "input"
-      label: "Git 认证 Token"
+      label: "Git 认证 Token（已废弃）"
       extend_prop:
         visible_conditions: []
         disabled_conditions: []
