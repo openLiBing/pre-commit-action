@@ -87,6 +87,30 @@ test('resolveBaseRef：基线 ref 缺失时回退 fetch，并返回 FETCH_HEAD',
   }
 });
 
+test('resolveBaseRef：回退 fetch 失败时输出 fetch-depth: 0 修复指引', () => {
+  const { root, work } = setupRepos();
+  const origExit = process.exit;
+  const origLog = console.log;
+  const logs = [];
+  try {
+    process.exit = () => {
+      throw new Error('__EXIT__');
+    };
+    console.log = (line) => logs.push(String(line));
+    assert.throws(
+      () => inDir(work, () => resolveBaseRef('not-exist-branch')),
+      /__EXIT__/
+    );
+    const output = logs.join('\n');
+    assert.ok(output.includes('fetch-depth: 0'), '缺少 fetch-depth: 0 的修复指引');
+    assert.ok(output.includes('gc_token'), '缺少 gc_token 已移除的说明');
+  } finally {
+    process.exit = origExit;
+    console.log = origLog;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('resolveBaseRef：回退 fetch 失败时报错并 exit(1)', () => {
   const { root, work } = setupRepos();
   const origExit = process.exit;

@@ -177,6 +177,24 @@ function detectMirrorConfig() {
   }
 }
 
+/** 基线 ref 缺失且回退 fetch 失败时，输出可直接照抄的配置修复指引。
+ * 插件已不接收 gc_token，不会注入任何 Git 凭证，只能依赖 checkout 持久化的凭证与远端 ref。
+ * @param {string} baseRef PR 目标分支 */
+function printBaseRefFixHint(baseRef) {
+  const safeRef = sanitizeLogValue(baseRef);
+  const lines = [
+    '基线 ref 解析失败，PR 增量检查无法运行。',
+    `修复方式：在 checkout 步骤显式配置 fetch-depth: 0（全量检出会生成 origin/${safeRef}）。`,
+    '  - name: Checkout repository',
+    '    uses: checkout',
+    '    with:',
+    '      fetch-depth: 0',
+    '原因：本插件不再接收 gc_token，自身不持有任何 Git 凭证；回退 git fetch 只能复用 checkout 持久化的凭证，GitCode 托管 checkout 默认不持久化凭证，因此必须依赖全量检出的远端 ref。',
+    '若 workflow 中仍传入 gc_token，请直接删除该输入（该输入已移除，不再生效）。',
+  ];
+  lines.forEach((line) => console.log(`[ERROR] ${line}`));
+}
+
 /** 解析 PR 增量比较的基线 ref。
  * 优先使用 checkout 全量检出（fetch-depth: 0）已生成的远端基线 ref origin/<baseRef>，
  * 此时无需插件再做任何认证 fetch；缺失时回退为直接 fetch，依赖 checkout 已持久化的
@@ -191,12 +209,12 @@ function resolveBaseRef(baseRef) {
   }
 
   console.log(`[WARN] 未找到基线 ref origin/${sanitizeLogValue(baseRef)}，回退为直接 fetch 目标分支`);
-  console.log('[WARN] 建议 checkout 步骤配置 fetch-depth: 0，全量检出时即生成基线远端 ref');
+  console.log('[WARN] 原因：checkout 未做全量检出（fetch-depth: 0），未生成基线远端 ref');
   try {
     execFile('git', ['fetch', 'origin', baseRef]);
   } catch (e) {
     console.log(`[ERROR] 拉取目标分支 ${sanitizeLogValue(baseRef)} 失败: ${sanitizeLogValue(e.message)}`);
-    console.log('[ERROR] 请确认 checkout 步骤已配置 fetch-depth: 0，或仓库凭证具备读取目标分支权限');
+    printBaseRefFixHint(baseRef);
     process.exit(1);
   }
   return 'FETCH_HEAD';
