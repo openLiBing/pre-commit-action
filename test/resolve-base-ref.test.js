@@ -3,10 +3,11 @@
 /**
  * resolveBaseRef 单测：PR 增量基线解析（不依赖任何网络与远端仓库）。
  *
- * 覆盖三条路径：
+ * 覆盖四条路径：
  *   1. checkout 全量检出已生成 origin/<baseRef> → 直接复用，不做 fetch
  *   2. origin/<baseRef> 缺失 → 回退 git fetch origin <baseRef>，返回 FETCH_HEAD
  *   3. 回退 fetch 失败 → 明确报错并 process.exit(1)
+ *   4. 浅克隆命中 ref → 输出浅历史提示，提示配置 fetch-depth: 0
  *
  * 用本地 bare 仓充当 origin，保证用例可离线执行。
  */
@@ -127,6 +128,30 @@ test('resolveBaseRef：回退 fetch 失败时报错并 exit(1)', () => {
     assert.strictEqual(exitCode, 1);
   } finally {
     process.exit = origExit;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('resolveBaseRef：浅克隆命中 ref 时提示配置 fetch-depth: 0', () => {
+  const { root, bare } = setupRepos();
+  try {
+    const cloneDir = path.join(root, 'shallow');
+    // --depth 需配合 file:// 协议才会真正产生浅克隆
+    git(root, ['clone', '--depth', '1', `file:///${bare.replace(/\\/g, '/')}`, cloneDir]);
+    const logs = [];
+    const origLog = console.log;
+    let fromRef;
+    try {
+      console.log = (line) => logs.push(String(line));
+      fromRef = inDir(cloneDir, () => resolveBaseRef('main'));
+    } finally {
+      console.log = origLog;
+    }
+    assert.strictEqual(fromRef, 'origin/main');
+    const output = logs.join('\n');
+    assert.ok(output.includes('浅克隆'), '缺少浅克隆提示');
+    assert.ok(output.includes('fetch-depth: 0'), '缺少 fetch-depth: 0 提示');
+  } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });

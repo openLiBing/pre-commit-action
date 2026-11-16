@@ -125,6 +125,8 @@ jobs:
     steps:
       - name: checkout
         uses: checkout
+        with:
+          fetch-depth: 0 # PR 增量门禁必需：全量检出才会生成 origin/<目标分支> 基线 ref
 
       - name: setup-python
         uses: setup-python
@@ -185,6 +187,8 @@ jobs:
     steps:
       - name: checkout
         uses: checkout
+        with:
+          fetch-depth: 0 # PR 增量门禁必需：全量检出才会生成 origin/<目标分支> 基线 ref
 
       - name: setup-python
         uses: setup-python

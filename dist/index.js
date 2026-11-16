@@ -201,6 +201,16 @@ function printBaseRefFixHint(baseRef) {
   lines.forEach((line) => console.log(`[ERROR] ${line}`));
 }
 
+/** 浅克隆下基线历史不完整，增量口径可能退化，输出提示但不阻断。
+ * 覆盖「origin/<baseRef> 存在但历史仍是浅的」中间态（如 fetch-depth: 1 且回退 fetch 成功）。 */
+function warnIfShallowClone() {
+  const shallow = execCapture(['git', 'rev-parse', '--is-shallow-repository']);
+  if (shallow === 'true') {
+    console.log('[WARN] 当前仓库为浅克隆（shallow），基线历史不完整');
+    console.log('[WARN] 增量比较可能退化为近似全量或无法定位 merge-base；建议在 checkout 步骤配置 fetch-depth: 0');
+  }
+}
+
 /** 解析 PR 增量比较的基线 ref。
  * 优先使用 checkout 全量检出（fetch-depth: 0）已生成的远端基线 ref origin/<baseRef>，
  * 此时无需插件再做任何认证 fetch；缺失时回退为直接 fetch，依赖 checkout 已持久化的
@@ -211,6 +221,7 @@ function resolveBaseRef(baseRef) {
   const baseSha = execCapture(['git', 'rev-parse', '--verify', '--quiet', `origin/${baseRef}`]);
   if (baseSha) {
     console.log(`[INFO] 使用已检出的基线 ref origin/${baseRef} (${sanitizeLogValue(baseSha.slice(0, 8))}) 做增量比较`);
+    warnIfShallowClone();
     return `origin/${baseRef}`;
   }
 
@@ -223,6 +234,7 @@ function resolveBaseRef(baseRef) {
     printBaseRefFixHint(baseRef);
     process.exit(1);
   }
+  warnIfShallowClone();
   return 'FETCH_HEAD';
 }
 
