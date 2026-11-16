@@ -1,5 +1,6 @@
 const { execSync, execFileSync, spawn } = require('child_process');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { buildToolSarif, matchToolParser } = require('./tool-parsers');
 
@@ -78,7 +79,10 @@ function exec(cmd) {
 
 function execFile(cmd, args, options = {}) {
   console.log(`> ${sanitizeLogValue(cmd)} ${sanitizeLogValue(args.join(' '))}`);
-  execFileSync(cmd, args, { stdio: 'inherit', cwd: options.cwd });
+  const spawnOptions = { stdio: 'inherit', cwd: options.cwd };
+  // 仅在显式传入时覆盖 env（兼容路径下 token 经环境变量传给 askpass 子进程，不出现在命令行）
+  if (options.env) spawnOptions.env = options.env;
+  execFileSync(cmd, args, spawnOptions);
 }
 
 function sanitizePath(pathStr) {
@@ -177,8 +181,37 @@ function detectMirrorConfig() {
   }
 }
 
+/** 为兼容路径的 git fetch 生成 GIT_ASKPASS 凭证脚本（gc_token 已废弃，仅存量调用方使用）。
+ * 脚本写在系统临时目录，token 经环境变量 PRE_COMMIT_GC_TOKEN 传给 askpass 子进程，
+ * 不出现在进程命令行参数，也不写入被检仓 .git/config。
+ * @param {string} token 用户凭证
+ * @returns {(string|null)} askpass 脚本绝对路径；token 为空时返回 null */
+function createGitAskpass(token) {
+  if (!token) return null;
+  const scriptPath = path.join(os.tmpdir(), `gc-askpass-${process.pid}.sh`);
+  const scriptContent = [
+    '#!/bin/sh',
+    'case "$1" in',
+    '  Username*) echo "oauth2" ;;',
+    '  *) echo "$PRE_COMMIT_GC_TOKEN" ;;',
+    'esac',
+    ''
+  ].join('\n');
+  fs.writeFileSync(scriptPath, scriptContent, { mode: 0o700 });
+  return scriptPath;
+}
+
+/** 删除 GIT_ASKPASS 凭证脚本（任务结束立即清理，避免临时残留）。 */
+function removeGitAskpass(scriptPath) {
+  if (!scriptPath) return;
+  try {
+    fs.rmSync(scriptPath, { force: true });
+  } catch (e) {
+    console.log(`[WARN] 清理 GIT_ASKPASS 脚本失败: ${sanitizePath(String(scriptPath))}`);
+  }
+}
+
 /** 基线 ref 缺失且回退 fetch 失败时，输出可直接照抄的配置修复指引。
- * 插件已不接收 gc_token，不会注入任何 Git 凭证，只能依赖 checkout 持久化的凭证与远端 ref。
  * @param {string} baseRef PR 目标分支 */
 function printBaseRefFixHint(baseRef) {
   const safeRef = sanitizeLogValue(baseRef);
@@ -189,8 +222,8 @@ function printBaseRefFixHint(baseRef) {
     '    uses: checkout',
     '    with:',
     '      fetch-depth: 0',
-    '原因：本插件不再接收 gc_token，自身不持有任何 Git 凭证；回退 git fetch 只能复用 checkout 持久化的凭证，GitCode 托管 checkout 默认不持久化凭证，因此必须依赖全量检出的远端 ref。',
-    '若 workflow 中仍传入 gc_token，请直接删除该输入（该输入已移除，不再生效）。',
+    '原因：未生成基线远端 ref，且未传入 gc_token，回退 git fetch 无可用凭证（GitCode 托管 checkout 默认不持久化凭证）。',
+    '存量 workflow 仍可继续传入 gc_token（已废弃，仅兼容），但建议迁移为 fetch-depth: 0 后删除该输入。',
   ];
   lines.forEach((line) => console.log(`[ERROR] ${line}`));
 }
@@ -206,9 +239,9 @@ function warnIfShallowClone() {
 }
 
 /** 解析 PR 增量比较的基线 ref。
- * 优先使用 checkout 全量检出（fetch-depth: 0）已生成的远端基线 ref origin/<baseRef>，
- * 此时无需插件再做任何认证 fetch；缺失时回退为直接 fetch，依赖 checkout 已持久化的
- * 仓库凭证，插件不接收也不处理任何 Git 凭证。
+ * 优先使用 checkout 全量检出（fetch-depth: 0）已生成的远端基线 ref origin/<baseRef>；
+ * 缺失时若存量调用方仍传入 gc_token（已废弃，仅兼容），走原 askpass 认证 fetch 路径并打印废弃警告；
+ * 仅当既无基线 ref 又无 gc_token 时才做无凭证 fetch，失败即 fail-closed。
  * @param {string} baseRef PR 目标分支
  * @returns {string} 可作为 pre-commit --from-ref 的 ref */
 function resolveBaseRef(baseRef) {
@@ -221,6 +254,30 @@ function resolveBaseRef(baseRef) {
 
   console.log(`[WARN] 未找到基线 ref origin/${sanitizeLogValue(baseRef)}，回退为直接 fetch 目标分支`);
   console.log('[WARN] 原因：checkout 未做全量检出（fetch-depth: 0），未生成基线远端 ref');
+
+  const token = getInput('gc_token');
+  if (token) {
+    // 兼容存量调用方：仍传入 gc_token 时保持原有的 askpass 认证 fetch 行为
+    console.log('[DEPRECATED] gc_token 输入已废弃（仅兼容保留）；建议 checkout 配置 fetch-depth: 0 后删除该输入');
+    const askpassScript = createGitAskpass(token);
+    try {
+      execFile('git', ['fetch', 'origin', baseRef], {
+        env: askpassScript
+          ? { ...process.env, GIT_ASKPASS: askpassScript, PRE_COMMIT_GC_TOKEN: token, GIT_TERMINAL_PROMPT: '0' }
+          : process.env
+      });
+    } catch (e) {
+      console.log(`[ERROR] 拉取目标分支 ${sanitizeLogValue(baseRef)} 失败: ${sanitizeLogValue(e.message)}`);
+      console.log('[ERROR] 请确认 gc_token 具备读取目标分支权限，或在 checkout 配置 fetch-depth: 0 后删除 gc_token');
+      process.exit(1);
+    } finally {
+      // 无论 fetch 成功与否都立即清理凭证脚本，缩小 token 暂存时间窗
+      removeGitAskpass(askpassScript);
+    }
+    warnIfShallowClone();
+    return 'FETCH_HEAD';
+  }
+
   try {
     execFile('git', ['fetch', 'origin', baseRef]);
   } catch (e) {

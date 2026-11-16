@@ -3,11 +3,12 @@
 /**
  * resolveBaseRef 单测：PR 增量基线解析（不依赖任何网络与远端仓库）。
  *
- * 覆盖四条路径：
+ * 覆盖五条路径：
  *   1. checkout 全量检出已生成 origin/<baseRef> → 直接复用，不做 fetch
  *   2. origin/<baseRef> 缺失 → 回退 git fetch origin <baseRef>，返回 FETCH_HEAD
  *   3. 回退 fetch 失败 → 明确报错并 process.exit(1)
  *   4. 浅克隆命中 ref → 输出浅历史提示，提示配置 fetch-depth: 0
+ *   5. 缺失基线 ref 但存量调用方传入 gc_token → 走兼容路径并打印 [DEPRECATED]
  *
  * 用本地 bare 仓充当 origin，保证用例可离线执行。
  */
@@ -104,7 +105,7 @@ test('resolveBaseRef：回退 fetch 失败时输出 fetch-depth: 0 修复指引'
     );
     const output = logs.join('\n');
     assert.ok(output.includes('fetch-depth: 0'), '缺少 fetch-depth: 0 的修复指引');
-    assert.ok(output.includes('gc_token'), '缺少 gc_token 已移除的说明');
+    assert.ok(output.includes('gc_token'), '缺少 gc_token 兼容/废弃说明');
   } finally {
     process.exit = origExit;
     console.log = origLog;
@@ -152,6 +153,33 @@ test('resolveBaseRef：浅克隆命中 ref 时提示配置 fetch-depth: 0', () =
     assert.ok(output.includes('浅克隆'), '缺少浅克隆提示');
     assert.ok(output.includes('fetch-depth: 0'), '缺少 fetch-depth: 0 提示');
   } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('resolveBaseRef：缺失基线 ref 但传入 gc_token 时走兼容路径并打印废弃警告', () => {
+  const { root, work } = setupRepos();
+  const origToken = process.env.INPUT_GC_TOKEN;
+  const logs = [];
+  const origLog = console.log;
+  try {
+    process.env.INPUT_GC_TOKEN = 'fake-token-for-compat';
+    git(work, ['update-ref', '-d', 'refs/remotes/origin/main']);
+    let fromRef;
+    try {
+      console.log = (line) => logs.push(String(line));
+      fromRef = inDir(work, () => resolveBaseRef('main'));
+    } finally {
+      console.log = origLog;
+    }
+    assert.strictEqual(fromRef, 'FETCH_HEAD');
+    assert.ok(logs.join('\n').includes('[DEPRECATED]'), '缺少 gc_token 废弃警告');
+  } finally {
+    if (origToken === undefined) {
+      delete process.env.INPUT_GC_TOKEN;
+    } else {
+      process.env.INPUT_GC_TOKEN = origToken;
+    }
     fs.rmSync(root, { recursive: true, force: true });
   }
 });

@@ -1,6 +1,6 @@
 {
   "name": "pre-commit-action",
-  "version": "2.0.0",
+  "version": "1.1.0",
   "description": "GitCode Action plugin for running pre-commit hooks",
   "main": "index.js",
   "scripts": {

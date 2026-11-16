@@ -11,16 +11,17 @@
 
 PR 增量检查流程：
 
-1. 直接使用 checkout 全量检出（`fetch-depth: 0`）已生成的基线远端 ref `origin/<baseRef>`，插件不再自行认证 fetch
+1. 直接使用 checkout 全量检出（`fetch-depth: 0`）已生成的基线远端 ref `origin/<baseRef>`，无需插件自行认证 fetch
 2. 执行 `pre-commit run --from-ref origin/<baseRef> --to-ref HEAD`
-3. 若 `origin/<baseRef>` 不存在，回退尝试 `git fetch origin <baseRef>`；该回退依赖 checkout 已持久化的仓库凭证，实测 GitCode 托管 checkout 不持久化凭证，回退不可用时会报错退出并提示配置 `fetch-depth: 0`
+3. 若 `origin/<baseRef>` 不存在：存量调用方仍传入 `gc_token` 时，走原 `GIT_ASKPASS` 认证 fetch 兼容路径（日志打印 `[DEPRECATED]`）；未传 `gc_token` 时回退无凭证 `git fetch origin <baseRef>`，失败即明确报错退出并提示配置 `fetch-depth: 0`
 
-> 强制前提：PR 场景的 checkout 步骤**必须**配置 `fetch-depth: 0`（全量检出）。浅检出不生成 `origin/<baseRef>`，回退 fetch 在 GitCode 上会因缺少凭证失败，导致 PR 增量门禁无法运行。插件不再接收任何 Git 认证 Token。
+> 推荐配置：PR 场景的 checkout 步骤配置 `fetch-depth: 0`（全量检出），这是最可靠的方式。`gc_token` 输入**已废弃（仅兼容保留）**，新接入无需传；存量 workflow 可继续使用，但建议迁移后删除。
 
 ## 输入参数
 
 | 参数       | 说明                                                                                                                                                                                                                                                               | 必填 | 默认值                   |
 | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---- | ------------------------ |
+| gc_token   | 【已废弃，仅兼容】基线 ref 缺失时用于 `git fetch` 认证；新接入请改用 checkout 的 `fetch-depth: 0`，无需传入                                                                                                                             | 否   | 空                       |
 | extra_args | pre-commit 运行参数。为空时自动判断：PR 事件检查增量文件，非 PR 检查全量；填写时按指定参数执行                                                                                                                                                                     | 否   | 空（自动判断）           |
 | report-dir | SARIF 报告约定目录（机器临时目录，非代码仓目录）。插件扫描该目录下 `*.sarif` 作为用户提供的报告；工具未提供时按支持列表解析 pre-commit 日志兜底生成 `<tool>.sarif` 到该目录。只生成报告文件，上传由 workflow 中 openlibing-upload-sarif 完成                       | 否   | /tmp/pre-commit-reports/ |
 | sarif-file | SARIF 文件/目录路径，逗号分隔支持多值（与 openlibing-upload-sarif 的 `sarif_file` 一致）：单个文件、多个文件、单个目录、多个目录（目录自动扫描其中所有 `.sarif` 文件，非递归）。填写后优先于 `report-dir` 目录扫描；未填写时回退扫描 `report-dir` 目录下 `*.sarif` | 否   | 空（回退 report-dir）    |
@@ -126,7 +127,7 @@ jobs:
       - name: checkout
         uses: checkout
         with:
-          fetch-depth: 0 # PR 增量门禁必需：全量检出才会生成 origin/<目标分支> 基线 ref
+          fetch-depth: 0 # 推荐：全量检出才会生成 origin/<目标分支> 基线 ref，避免走 gc_token 兼容路径
 
       - name: setup-python
         uses: setup-python
@@ -188,7 +189,7 @@ jobs:
       - name: checkout
         uses: checkout
         with:
-          fetch-depth: 0 # PR 增量门禁必需：全量检出才会生成 origin/<目标分支> 基线 ref
+          fetch-depth: 0 # 推荐：全量检出才会生成 origin/<目标分支> 基线 ref，避免走 gc_token 兼容路径
 
       - name: setup-python
         uses: setup-python
@@ -227,7 +228,7 @@ repos:
 
 ## 注意事项
 
-- 运行前需先使用 `checkout` 检出代码；PR 增量检查场景**必须**配置 `fetch-depth: 0`（浅检出不生成基线 ref，回退 fetch 在 GitCode 上因缺少凭证不可用）
+- 运行前需先使用 `checkout` 检出代码；PR 增量检查推荐配置 `fetch-depth: 0`（浅检出不生成基线 ref，将回退 `git fetch`：传 `gc_token` 走兼容认证路径，否则依赖 checkout 持久化凭证，通常不可用）
 - 运行前需先使用 `setup-python` 配置 Python 环境
 - 项目根目录需包含 `.pre-commit-config.yaml` 配置文件
 - PR 增量检查依赖 `ATOMGIT_BASE_REF` 和 `ATOMGIT_HEAD_REF` 环境变量
