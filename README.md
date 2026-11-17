@@ -40,7 +40,7 @@ PR 增量检查流程：
 
 插件安装 pre-commit 及各语言钩子依赖时需要访问 PyPI / Go module proxy。**未配置时回退官方源**（pypi.org / proxy.golang.org），功能可用但速度极慢，慢网/内网 runner 可能明显变慢甚至超时。实测数据（未配置镜像、走 PyPI 官方源）：`virtualenv` 单包 5.6MB 下载速率约 30 KB/s、耗时 3 分 52 秒，整个 job 约 6 分钟。
 
-> **版本要求**：本节环境变量需镜像配置代码支持合入（PR !12）并发版后生效；当前已发布版本 v1.0.3 的镜像地址仍为代码内固定值，不读取这两个变量（配置了也不会报错，仅不生效）。发版前请勿依赖本节配置。
+> **版本要求**：本节环境变量自 **v1.1.0** 起生效；v1.0.3 及更早版本的镜像地址为代码内固定值，不读取这两个变量（配置了也不会报错，仅不生效）。
 
 | 环境变量           | 作用                                   | 推荐值（华为云镜像）                                     | 未配置时回退     |
 | ------------------ | -------------------------------------- | -------------------------------------------------------- | ---------------- |
@@ -54,7 +54,7 @@ jobs:
   pre-commit:
     steps:
       - name: run pre-commit
-        uses: openlibing/pre-commit-action@v1.0.3
+        uses: openlibing/pre-commit-action@v1.1.0
         env:
           PIP_MIRROR_DEFAULT: https://mirrors.huaweicloud.com/repository/pypi/simple
           GO_PROXY_DEFAULT: https://mirrors.huaweicloud.com/repository/goproxy/
@@ -95,7 +95,7 @@ jobs:
           cache: true
       - name: run pre-commit (generate sarif)
         id: pre-commit
-        uses: openlibing/pre-commit-action@v1.0.40
+        uses: openlibing/pre-commit-action@v1.1.0
         with:
           report-dir: /tmp/pre-commit-reports/
       - name: upload sarif reports
@@ -135,7 +135,7 @@ jobs:
           python-version: "3.14"
 
       - name: run pre-commit
-        uses: openlibing/pre-commit-action@v1.0.40
+        uses: openlibing/pre-commit-action@v1.1.0
         with:
           extra_args: ${{ inputs.extra_args }}
 ```
@@ -197,7 +197,7 @@ jobs:
           python-version: "3.14"
 
       - name: run pre-commit
-        uses: openlibing/pre-commit-action@v1.0.40
+        uses: openlibing/pre-commit-action@v1.1.0
         with:
           extra_args: ${{ inputs.extra_args }}
 ```
