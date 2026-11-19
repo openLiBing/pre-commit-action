@@ -3,7 +3,7 @@ name: oss-pr-scan
 on:
   pull_request_target:
     branches:
-      - '*'
+      - "*"
 
 permissions:
   repository: read

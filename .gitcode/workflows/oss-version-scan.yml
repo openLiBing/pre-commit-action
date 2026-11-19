@@ -1,59 +1,59 @@
 name: oss-version-scan
 
 on:
-  workflow_dispatch:  ## 开发自测：手动触发，指定扫描分支
+  workflow_dispatch: ## 开发自测：手动触发，指定扫描分支
     inputs:
       branch:
-        description: '扫描分支，默认 master'
+        description: "扫描分支，默认 master"
         required: false
-        default: 'master'
+        default: "master"
       vuln-critical-limit:
-        description: 'CRITICAL漏洞门禁(>门禁阻断)，默认0'
+        description: "CRITICAL漏洞门禁(>门禁阻断)，默认0"
         required: false
-        default: '0'
+        default: "0"
       vuln-high-limit:
-        description: 'HIGH漏洞门禁(>门禁阻断)，默认0'
+        description: "HIGH漏洞门禁(>门禁阻断)，默认0"
         required: false
-        default: '0'
+        default: "0"
       vuln-medium-limit:
-        description: 'MEDIUM漏洞门禁(>门禁仅提示不阻断)，默认1000'
+        description: "MEDIUM漏洞门禁(>门禁仅提示不阻断)，默认1000"
         required: false
-        default: '1000'
+        default: "1000"
       vuln-low-limit:
-        description: 'LOW漏洞门禁(>门禁仅提示不阻断)，默认1000'
+        description: "LOW漏洞门禁(>门禁仅提示不阻断)，默认1000"
         required: false
-        default: '1000'
+        default: "1000"
       license-critical-limit:
-        description: 'CRITICAL license门禁(>门禁阻断)，默认50'
+        description: "CRITICAL license门禁(>门禁阻断)，默认50"
         required: false
-        default: '50'
+        default: "50"
       license-high-limit:
-        description: 'HIGH license门禁(>门禁阻断)，默认50'
+        description: "HIGH license门禁(>门禁阻断)，默认50"
         required: false
-        default: '50'
+        default: "50"
       license-medium-limit:
-        description: 'MEDIUM license门禁(>门禁仅提示不阻断)，默认1000'
+        description: "MEDIUM license门禁(>门禁仅提示不阻断)，默认1000"
         required: false
-        default: '1000'
+        default: "1000"
       license-low-limit:
-        description: 'LOW license门禁(>门禁仅提示不阻断)，默认10000'
+        description: "LOW license门禁(>门禁仅提示不阻断)，默认10000"
         required: false
-        default: '10000'
+        default: "10000"
       show-all-vulnerabilities:
-        description: '显示全量漏洞（含无修复版本与 MEDIUM/LOW），默认 false；不改变门禁'
+        description: "显示全量漏洞（含无修复版本与 MEDIUM/LOW），默认 false；不改变门禁"
         required: false
-        default: 'false'
+        default: "false"
       sbom-output:
-        description: '开源软件清单输出开关。null=不输出(默认)；list=输出开源软件清单(组件+版本)'
+        description: "开源软件清单输出开关。null=不输出(默认)；list=输出开源软件清单(组件+版本)"
         required: false
-        default: 'null'
+        default: "null"
       sbom-output-type:
-        description: '开源软件清单输出形式(仅 sbom-output=list 时生效)。table=markdown表格(默认)；code=代码块形式'
+        description: "开源软件清单输出形式(仅 sbom-output=list 时生效)。table=markdown表格(默认)；code=代码块形式"
         required: false
-        default: 'table'
+        default: "table"
 
 permissions:
-  repository: read  # 本地 trivy 扫描无需写权限，最小授权
+  repository: read # 本地 trivy 扫描无需写权限，最小授权
 
 jobs:
   oss-version-scan:
