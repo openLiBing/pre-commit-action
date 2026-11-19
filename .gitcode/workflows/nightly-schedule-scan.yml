@@ -2,7 +2,7 @@ name: nightly-schedule-scan
 
 on:
   schedule:
-    - cron: "0 0 3 * * ?"
+    - cron: "58 3 * * *"
   workflow_dispatch:
 
 permissions:
@@ -16,24 +16,12 @@ stages:
     jobs:
       pre-commit:
         name: pre-commit
-        runs-on: ["self-hosted", "region=overseas"]
+        runs-on: ["self-hosted", "default"]
         steps:
           - name: Checkout repository
             uses: checkout
             with:
               ref: master
-
-          - name: setup-go
-            uses: setup-go
-            with:
-              version: 1.26
-              cache: true
-
-          - name: setup-node
-            uses: setup-node
-            with:
-              node-version: 20
-              cache: true
 
           - name: Install npm dependencies
             run: npm install
@@ -54,3 +42,26 @@ stages:
             with:
               sarif_file: ${{ steps.pre-commit.outputs.sarif-files }}
               source_path: .
+
+      oss-version-scan:
+        name: 开源漏洞和license扫描
+        runs-on: ["self-hosted", "default"]
+        steps:
+          - name: Checkout repository
+            uses: checkout
+            with:
+              ref: master
+
+          - name: Run oss-version-scan-action
+            uses: openlibing/trivy-action@v1.4
+            with:
+              scan-type: version
+              vuln-critical-limit: ${{ vars.NIGHTLY_VUL_CRITICAL_LIMIT || '0'  }}
+              vuln-high-limit: ${{ vars.NIGHTLY_VUL_HIGH_LIMIT || '0'  }}
+              vuln-medium-limit: ${{ vars.NIGHTLY_VUL_MEDIUM_LIMIT || '1000' }}
+              vuln-low-limit: ${{ vars.NIGHTLY_VUL_LOW_LIMIT || '1000' }}
+              license-critical-limit: ${{ vars.NIGHTLY_LICENSE_CRITICAL_LIMIT || '50' }}
+              license-high-limit: ${{ vars.NIGHTLY_LICENSE_HIGH_LIMIT || '50' }}
+              license-medium-limit: ${{ vars.NIGHTLY_LICENSE_MEDIUM_LIMIT || '1000' }}
+              license-low-limit: ${{ vars.NIGHTLY_LICENSE_LOW_LIMIT || '10000' }}
+              show-all-vulnerabilities: "true"
